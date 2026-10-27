@@ -1,0 +1,1258 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<script>window.DEMO={"user": "kavita.rao@demo-qa.com", "mail": false, "roles": [{"label": "View as SME: Kavita Rao", "email": "kavita.rao@demo-qa.com"}, {"label": "View as SME: Manish Tiwari", "email": "manish.tiwari@demo-qa.com"}, {"label": "View as: not on SME list", "email": "visitor@demo-qa.com"}], "intro": "Signed in as a sample SME. Write a coaching plan on any case and save it. Use the switcher to see another SME or the access-denied screen.", "back": "index.html#work"};</script>
+<script src="lib/demo-data.js"></script>
+<script src="lib/gas-emu.js"></script>
+<script>
+(function(){
+var D=DEMODATA, R=D.rng(21);
+var smes=[{name:'Kavita Rao',email:'kavita.rao@demo-qa.com'},{name:'Manish Tiwari',email:'manish.tiwari@demo-qa.com'}];
+var fmea=["Was the case resolved correctly?","Was the correct case category selected?","Did the agent avoid unnecessary high AAT/AHT on the case?","Did the agent avoid crossing out the case without providing a resolution?","Did the agent avoid inappropriate use of the Verify status?","Did the agent avoid sharing internal information with the seller?"];
+var gen=["Did agent answer all questions?","Did associate use internal article?","Did the associate reference the correct article and explain self-serve options?","Was root cause acknowledged?","Did associate provide correct Expections and Education?","Did associate acknowledge reopen reason?","Was note template used correctly?","Rude/blame wording avoided?","Case transfer correct?","Was the wording correct and free of spelling errors?","Did CSAT Survey Sent?","Did agent Initiated the IRIS?","Did the agent use the correct email format and/or the required Internal/HR template, where applicable?"];
+var agents=D.AGENTS.slice(0,24), lobs=['SSO MPCX','SSO Disputes (SFF)','SSO Core'];
+var ros=[['Agent Salesforce Name','LOB','SME Name']];
+agents.forEach(function(a,i){ros.push([a,lobs[i%3],smes[i%2].name]);});
+var hdr=['Week','Audit Date Formatted','Case Number','Agent Salesforce Name','LOB','Source_Sheet','Audit Score','Coaching Note'].concat(fmea).concat(gen).concat(['Emp Status']);
+var rows=[hdr], cn=17100000, today=D.todayIst();
+var notes=['Agent closed the case without confirming the refund was processed.','Wrong case category selected (Orders instead of Payments).','Internal escalation details were shared in the seller email.','Kept the case in Verify without a follow-up for 48 hours.','Resolution was partial; second question about fees was not answered.','Crossed out the case before sending the resolution.'];
+for(var i=0;i<260;i++){
+  var a=agents[Math.floor(R()*agents.length)], ai=agents.indexOf(a), back=Math.floor(R()*27), d=new Date(today.getTime()-(back+1)*86400000);
+  var wk=D.walmartWeekOf(d), weak=(ai%7===0)?0.35:(ai%5===0?0.18:0.06);
+  var f=fmea.map(function(){return R()<weak*0.5?'No':'Yes';}), g=gen.map(function(){var x=R();return x<weak?'No':(x<weak+0.1?'NA':'Yes');});
+  var fatal=f[0]==='No', y=0,t=0; g.concat(f).forEach(function(v){if(v!=='NA'){t++; if(v==='Yes')y++;}});
+  var score=fatal?0:Math.round(y/t*100);
+  rows.push(['Week '+wk, Utilities.formatDate(d,'UTC','yyyy-MM-dd'), String(cn+=3+Math.floor(R()*50)), a, lobs[ai%3], R()<.5?'AuditData_Reopen':'AuditData_FCR', score/100, (fatal||f.indexOf('No')>-1)?notes[Math.floor(R()*notes.length)]:'Good handling.'].concat(f).concat(g).concat([ai===23?'Inactive':'Active']));
+}
+DEMO.book('ACTIVE',{'SME Details':[['Name','Email']].concat(smes.map(function(s){return [s.name,s.email];})),Roster:ros,'SME Coaching Note':[['Case Number','Salesforce Name','LOB','View Type','Parameter','SME Coaching Plan','SME Name','Timestamp']],Analyze_Data_Sources:rows});
+// a few disputes
+var disp=[['Timestamp','Email Address','Case Number','QTL_Dispute_Review','SME Comments']];
+rows.slice(1).filter(function(r){return r[6]===0;}).slice(0,9).forEach(function(r,i){disp.push([new Date(),'agent@demo-qa.com',r[2],['Valid','Invalid','Pending','Invalid'][i%4],i%3===0?'':'Reviewed with agent']);});
+DEMO.book('DISPUTE_SS',{'Form Responses 1':disp});
+})();
+
+</script>
+<script>
+DEMO.server=(function(){
+function doGet() {
+  return HtmlService.createTemplateFromFile('Index')
+    .evaluate()
+    .setTitle('📊 AGENT FEEDBACK PORTAL')
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+function cleanCaseNum(val) {
+  if (val === null || val === undefined) return '';
+  return String(val).trim().replace(/\.0$/, '');
+}
+
+function parseDateISO(dateVal) {
+  if (!dateVal && dateVal !== 0) return '';
+  if (dateVal instanceof Date) {
+    return isNaN(dateVal.getTime()) ? '' : Utilities.formatDate(dateVal, Session.getScriptTimeZone(), "yyyy-MM-dd");
+  }
+  if (typeof dateVal === 'number' && dateVal > 30000) {
+    let d = new Date(Math.round((dateVal - 25569) * 86400 * 1000));
+    return isNaN(d.getTime()) ? '' : Utilities.formatDate(d, Session.getScriptTimeZone(), "yyyy-MM-dd");
+  }
+  let str = String(dateVal).trim();
+  if (!str) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+
+  // Handles DD/MM/YYYY or DD-MM-YYYY formats with or without time stamps
+  let dmyMatch = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+  if (dmyMatch) {
+    let day = dmyMatch[1].padStart(2, '0');
+    let month = dmyMatch[2].padStart(2, '0');
+    let year = dmyMatch[3];
+    return `${year}-${month}-${day}`;
+  }
+
+  let d = new Date(str);
+  return isNaN(d.getTime()) ? '' : Utilities.formatDate(d, Session.getScriptTimeZone(), "yyyy-MM-dd");
+}
+
+function getDashboardData() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // 1. FAST ACCESS CONTROL
+  let userEmail = "";
+  try {
+    userEmail = (Session.getActiveUser().getEmail() || "").toLowerCase().trim();
+  } catch(e) {
+    userEmail = "";
+  }
+
+  let smeDetailsSheet = ss.getSheetByName('SME Details');
+  let isAuthorized = false;
+  let loggedInSmeName = "";
+
+  if (smeDetailsSheet) {
+    let smeData = smeDetailsSheet.getDataRange().getValues();
+    if (smeData.length > 1) {
+      let smeHeaders = smeData[0].map(h => String(h).trim().toLowerCase());
+      let nameCol = smeHeaders.indexOf('name');
+      let emailCol = smeHeaders.indexOf('email');
+
+      if (nameCol !== -1 && emailCol !== -1) {
+        for (let r = 1; r < smeData.length; r++) {
+          let rowEmail = String(smeData[r][emailCol] || '').toLowerCase().trim();
+          if (userEmail !== "" && rowEmail === userEmail) {
+            isAuthorized = true;
+            loggedInSmeName = String(smeData[r][nameCol] || '').trim();
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  if (!isAuthorized) {
+    return { authorized: false, userEmail: userEmail || "Unknown / Unauthenticated Email" };
+  }
+
+  // 2. ROSTER ALIGNMENT (Optimized Set Lookup)
+  let assignedAgents = new Set();
+  let rosterSheet = ss.getSheetByName('Roster');
+  if (rosterSheet) {
+    let rosterData = rosterSheet.getDataRange().getValues();
+    if (rosterData.length > 1) {
+      let rHeaders = rosterData[0].map(h => String(h).trim().toLowerCase());
+      let agentNameIdx = rHeaders.findIndex(h => h.includes('salesforce name') || h.includes('agent'));
+      let smeNameIdx = rHeaders.findIndex(h => h.includes('sme name') || h === 'sme');
+
+      if (agentNameIdx !== -1 && smeNameIdx !== -1) {
+        let loggedInSmeLower = loggedInSmeName.toLowerCase();
+        let userEmailLower = userEmail.toLowerCase();
+        for (let k = 1; k < rosterData.length; k++) {
+          let smeInRoster = String(rosterData[k][smeNameIdx] || '').trim().toLowerCase();
+          let agentInRoster = String(rosterData[k][agentNameIdx] || '').trim();
+
+          if ((loggedInSmeName && smeInRoster === loggedInSmeLower) || (userEmail && smeInRoster === userEmailLower)) {
+            if (agentInRoster) assignedAgents.add(agentInRoster.toLowerCase());
+          }
+        }
+      }
+    }
+  }
+
+  // 3. SME COACHING NOTES
+  let feedbackMap = {};
+  let completedCaseSet = new Set();
+  const feedbackSheet = ss.getSheetByName('SME Coaching Note');
+
+  if (feedbackSheet) {
+    const fbData = feedbackSheet.getDataRange().getValues();
+    if (fbData.length > 1) {
+      const fbHeaders = fbData[0].map(h => String(h).trim().toLowerCase());
+      const cNumIdx = fbHeaders.indexOf('case number');
+      const viewIdx = fbHeaders.indexOf('view type');
+      const planIdx = fbHeaders.indexOf('sme coaching plan');
+      let smeIdx = fbHeaders.indexOf('sme name');
+      if (smeIdx === -1) smeIdx = fbHeaders.indexOf('sme');
+      const timeIdx = fbHeaders.indexOf('timestamp');
+
+      let loggedInSmeLower = loggedInSmeName.toLowerCase();
+      let userEmailLower = userEmail.toLowerCase();
+
+      for (let j = 1; j < fbData.length; j++) {
+        let cNum = cleanCaseNum(fbData[j][cNumIdx]);
+        let vType = String(fbData[j][viewIdx] || '').trim().toLowerCase();
+        let plan = String(fbData[j][planIdx] || '').trim();
+        let recordedSme = (smeIdx !== -1) ? String(fbData[j][smeIdx] || '').trim() : '';
+        let ts = fbData[j][timeIdx];
+        let tsFormatted = (ts instanceof Date)
+          ? Utilities.formatDate(ts, Session.getScriptTimeZone(), "dd-MMM-yyyy HH:mm:ss")
+          : String(ts);
+
+        if (cNum && plan && plan.toLowerCase() !== 'pending' && plan.toLowerCase() !== 'open') {
+          let feedbackObj = {
+            plan: plan,
+            smeName: recordedSme || "SME/TL",
+            timestamp: tsFormatted
+          };
+
+          feedbackMap[`${cNum}_${vType}`] = feedbackObj;
+          feedbackMap[cNum] = feedbackObj;
+
+          let recordedSmeLower = recordedSme.toLowerCase();
+          if ((loggedInSmeName && recordedSmeLower === loggedInSmeLower) || (userEmail && recordedSmeLower === userEmailLower) || !recordedSme) {
+            completedCaseSet.add(cNum);
+          }
+        }
+      }
+    }
+  }
+
+  // 4. QA DISPUTES
+  const DISPUTE_SHEET_ID = 'DISPUTE_SS';
+  let disputeMap = {};
+
+  try {
+    const disputeSs = SpreadsheetApp.openById(DISPUTE_SHEET_ID);
+    let disputeSheet = disputeSs.getSheetByName('Form Responses 1') || disputeSs.getSheets()[0];
+    const disputeData = disputeSheet.getDataRange().getValues();
+    if (disputeData.length > 1) {
+      const disputeHeaders = disputeData[0].map(h => String(h).trim().toLowerCase());
+      const dCaseCol = disputeHeaders.findIndex(h => h.includes('case number'));
+      const dQtlReviewCol = disputeHeaders.findIndex(h => h.includes('qtl_dispute_review') || h.includes('qtl_dispute') || h.includes('valid_invalid'));
+      const dSmeCommentsCol = disputeHeaders.findIndex(h => h === 'sme comments' || h === 'sme comment' || h.includes('sme comment') || h.includes('sme_comment'));
+
+      if (dCaseCol !== -1) {
+        for (let i = 1; i < disputeData.length; i++) {
+          const cNum = cleanCaseNum(disputeData[i][dCaseCol]);
+          if (!cNum) continue;
+
+          const rawReviewStatus = (dQtlReviewCol !== -1 && disputeData[i][dQtlReviewCol])
+            ? String(disputeData[i][dQtlReviewCol]).trim().toLowerCase()
+            : 'pending';
+          const smeCommentVal = (dSmeCommentsCol !== -1 && disputeData[i][dSmeCommentsCol])
+            ? String(disputeData[i][dSmeCommentsCol]).trim()
+            : '';
+
+          disputeMap[cNum] = {
+            raised: true,
+            status: rawReviewStatus || 'pending',
+            smePending: (smeCommentVal === '')
+          };
+        }
+      }
+    }
+  } catch (e) {
+    Logger.log("Dispute Sheet Error: " + e.toString());
+  }
+
+  // 5. AUDIT DATA
+  const auditSheet = ss.getSheetByName('Analyze_Data_Sources');
+  if (!auditSheet) throw new Error("Sheet 'Analyze_Data_Sources' not found!");
+  const auditData = auditSheet.getDataRange().getValues();
+  const auditHeaders = auditData[0].map(h => String(h).trim().toLowerCase());
+
+  const lobCol = auditHeaders.findIndex(h => h === 'lob');
+  const agentCol = auditHeaders.findIndex(h => h.includes('salesforce name') || h.includes('agent'));
+  const caseCol = auditHeaders.findIndex(h => h.includes('case number'));
+  const weekCol = auditHeaders.findIndex(h => h === 'week' || h.includes('week'));
+  const sourceSheetCol = auditHeaders.findIndex(h => h === 'source_sheet' || h.includes('source_sheet') || h.includes('source sheet'));
+  
+  let statusCol = auditHeaders.findIndex(h => h.includes('emp status') || h.includes('employee status') || h === 'status');
+  if (statusCol === -1) statusCol = 58;
+
+  let auditDateCol = auditHeaders.findIndex(h => h === 'audit date formatted' || h.includes('audit date formatted'));
+  if (auditDateCol === -1) {
+    auditDateCol = auditHeaders.findIndex(h => h.includes('audit date') || h.includes('accept date') || h.includes('case date'));
+  }
+  if (auditDateCol === -1) auditDateCol = auditHeaders.findIndex(h => h.includes('date'));
+
+  const scoreCol = auditHeaders.findIndex(h => h.includes('audit score'));
+  const coachingNoteCol = auditHeaders.findIndex(h => h.includes('coaching note'));
+
+  const fmeaRedParams = [
+    "Was the case resolved correctly?",
+    "Was the correct case category selected?",
+    "Did the agent avoid unnecessary high AAT/AHT on the case?",
+    "Did the agent avoid crossing out the case without providing a resolution?",
+    "Did the agent avoid inappropriate use of the Verify status?",
+    "Did the agent avoid sharing internal information with the seller?"
+  ];
+
+  const generalParams = [
+    "Did agent answer all questions?",
+    "Did associate use internal article?",
+    "Did the associate reference the correct article and explain self-serve options?",
+    "Was root cause acknowledged?",
+    "Did associate provide correct Expections and Education?",
+    "Did associate acknowledge reopen reason?",
+    "Was note template used correctly?",
+    "Rude/blame wording avoided?",
+    "Case transfer correct?",
+    "Was the wording correct and free of spelling errors?",
+    "Did CSAT Survey Sent?",
+    "Did agent Initiated the IRIS?",
+    "Did the agent use the correct email format and/or the required Internal/HR template, where applicable?"
+  ];
+
+  const rawHeaders = auditData[0].map(h => String(h).trim());
+  const fmeaIndices = fmeaRedParams.map(p => ({ name: p, index: rawHeaders.indexOf(p) })).filter(p => p.index !== -1);
+  const generalIndices = generalParams.map(p => ({ name: p, index: rawHeaders.indexOf(p) })).filter(p => p.index !== -1);
+
+  let fmeaRecords = [];
+  let fatalRecords = [];
+  let allAudits = [];
+  let weeksList = new Set();
+
+  for (let i = 1; i < auditData.length; i++) {
+    const row = auditData[i];
+
+    const empStatus = String(row[statusCol] || '').trim().toLowerCase();
+    if (empStatus !== 'active') continue;
+
+    const agent = String(row[agentCol] || '').trim();
+    if (!agent || !assignedAgents.has(agent.toLowerCase())) continue;
+
+    const caseNum = cleanCaseNum(row[caseCol]);
+    if (!caseNum) continue;
+
+    const lob = String(row[lobCol] || '').trim();
+    const weekRaw = String(row[weekCol] || '').trim();
+    const auditDateStr = (auditDateCol !== -1) ? parseDateISO(row[auditDateCol]) : '';
+    const rawScore = row[scoreCol];
+    const coaching = String(row[coachingNoteCol] || 'No QA note provided').trim();
+
+    let rawSourceSheet = (sourceSheetCol !== -1) ? String(row[sourceSheetCol] || '').trim() : '';
+    let sourceType = '';
+    let lowerSource = rawSourceSheet.toLowerCase();
+    if (lowerSource.includes('reopen')) {
+      sourceType = 'Reopen';
+    } else if (lowerSource.includes('fcr')) {
+      sourceType = 'FCR';
+    } else {
+      sourceType = rawSourceSheet;
+    }
+
+    const week = weekRaw.replace(/^week\s*/i, '').trim();
+    if (week) weeksList.add(week);
+
+    let numericScore = parseFloat(rawScore);
+    let percentVal = !isNaN(numericScore) ? (numericScore <= 1 ? numericScore * 100 : numericScore) : 0;
+    let roundedScore = Math.round(percentVal);
+
+    const dispInfo = disputeMap[caseNum] || { raised: false, status: 'none', smePending: false };
+    const isInvalidDispute = dispInfo.status.includes('invalid');
+    const isValidDispute = dispInfo.status.includes('valid') && !isInvalidDispute;
+
+    if (isValidDispute) continue;
+
+    let caseFmeaFailures = [];
+    for (let k = 0; k < fmeaIndices.length; k++) {
+      if (String(row[fmeaIndices[k].index]).trim().toLowerCase() === 'no') {
+        caseFmeaFailures.push(fmeaIndices[k].name);
+      }
+    }
+
+    let caseGeneralFailures = [];
+    for (let k = 0; k < generalIndices.length; k++) {
+      if (String(row[generalIndices[k].index]).trim().toLowerCase() === 'no') {
+        caseGeneralFailures.push(generalIndices[k].name);
+      }
+    }
+
+    const isZeroPercent = (roundedScore === 0);
+    const hasFmeaFailure = (caseFmeaFailures.length > 0);
+
+    if (!isZeroPercent && !hasFmeaFailure) continue;
+
+    allAudits.push({
+      week: week,
+      lob: lob,
+      agent: agent,
+      caseNumber: caseNum,
+      auditDate: auditDateStr,
+      numericScore: roundedScore,
+      disputeStatus: dispInfo.status
+    });
+
+    let displayScore = roundedScore + "%";
+    const combinedAllDefects = [...caseFmeaFailures, ...caseGeneralFailures];
+
+    // 1. FMEA Records
+    if (hasFmeaFailure) {
+      let fb = feedbackMap[`${caseNum}_fmea`] || feedbackMap[caseNum] || null;
+      fmeaRecords.push({
+        week: week,
+        lob: lob,
+        agent: agent,
+        sourceType: sourceType,
+        caseNumber: caseNum,
+        auditDate: auditDateStr,
+        numericScore: roundedScore,
+        auditScore: displayScore,
+        disputeInfo: dispInfo,
+        disputeStatus: isInvalidDispute ? 'invalid' : dispInfo.status,
+        failedParameters: caseFmeaFailures,
+        allFailedParameters: combinedAllDefects,
+        coachingNote: coaching,
+        existingFeedback: fb ? fb.plan : null,
+        existingSmeName: fb ? fb.smeName : null,
+        feedbackTimestamp: fb ? fb.timestamp : null
+      });
+    }
+
+    // 2. Fatal 0% Records
+    if (isZeroPercent) {
+      let fb = feedbackMap[`${caseNum}_fatal`] || feedbackMap[`${caseNum}_fmea`] || feedbackMap[caseNum] || null;
+      let fatalDisplayParams = (caseFmeaFailures.length > 0)
+        ? caseFmeaFailures
+        : (caseGeneralFailures.length > 0 ? caseGeneralFailures : ["Fatal Defect (0% Audit Score)"]);
+
+      fatalRecords.push({
+        week: week,
+        lob: lob,
+        agent: agent,
+        sourceType: sourceType,
+        caseNumber: caseNum,
+        auditDate: auditDateStr,
+        numericScore: roundedScore,
+        auditScore: displayScore,
+        disputeInfo: dispInfo,
+        disputeStatus: isInvalidDispute ? 'invalid' : dispInfo.status,
+        failedParameters: fatalDisplayParams,
+        allFailedParameters: combinedAllDefects,
+        coachingNote: coaching,
+        existingFeedback: fb ? fb.plan : null,
+        existingSmeName: fb ? fb.smeName : null,
+        feedbackTimestamp: fb ? fb.timestamp : null
+      });
+    }
+  }
+
+  const sortedWeeks = Array.from(weeksList).sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+
+  return {
+    authorized: true,
+    smeName: loggedInSmeName,
+    smeEmail: userEmail,
+    weeks: sortedWeeks,
+    fmeaData: fmeaRecords,
+    fatalData: fatalRecords,
+    allAudits: allAudits,
+    smeCompletedCaseList: Array.from(completedCaseSet)
+  };
+}
+
+function saveSMEFeedback(agent, lob, viewType, parameters, caseNumber, feedback, smeName) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let feedbackSheet = ss.getSheetByName('SME Coaching Note');
+  
+  if (!feedbackSheet) {
+    feedbackSheet = ss.insertSheet('SME Coaching Note');
+    feedbackSheet.appendRow(['Case Number', 'Salesforce Name', 'LOB', 'View Type', 'Parameter', 'SME Coaching Plan', 'SME Name', 'Timestamp']);
+  }
+
+  const now = new Date();
+  const formattedTimestamp = Utilities.formatDate(now, Session.getScriptTimeZone(), "dd-MMM-yyyy HH:mm:ss");
+  const finalSmeName = smeName || "SME/TL";
+
+  feedbackSheet.appendRow([
+    cleanCaseNum(caseNumber),
+    agent,
+    lob,
+    viewType,
+    Array.isArray(parameters) ? parameters.join(' | ') : parameters,
+    feedback,
+    finalSmeName,
+    formattedTimestamp
+  ]);
+  
+  return {
+    status: "Success",
+    timestamp: formattedTimestamp,
+    smeName: finalSmeName
+  };
+}
+;return {cleanCaseNum:cleanCaseNum,doGet:doGet,getDashboardData:getDashboardData,parseDateISO:parseDateISO,saveSMEFeedback:saveSMEFeedback};
+})();
+if(DEMO.init) DEMO.init();
+</script>
+
+  
+  <link rel="stylesheet" href="lib/bs5.css">
+  <style>
+    body { background-color: #f8fafc; font-family: 'Segoe UI', system-ui, sans-serif; }
+    
+    #initialPageLoader {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background-color: #f8fafc;
+      z-index: 9999;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .header-panel { background: #0f172a; color: white; padding: 18px 0; margin-bottom: 20px; }
+    .kpi-card { background: white; border-radius: 8px; padding: 12px 16px; border-left: 4px solid #2563eb; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+    .kpi-title { font-size: 0.75rem; color: #64748b; font-weight: 600; text-transform: uppercase; }
+    .kpi-value { font-size: 1.35rem; font-weight: 700; color: #0f172a; }
+
+    .sme-kpi-box {
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.18);
+      border-radius: 6px;
+      padding: 6px 12px;
+      text-align: center;
+      min-width: 110px;
+    }
+    .sme-kpi-val { font-size: 1.15rem; font-weight: 700; color: #38bdf8; }
+    .sme-kpi-lbl { font-size: 0.7rem; text-transform: uppercase; opacity: 0.8; }
+
+    /* Tab colors */
+    .nav-pills #fmea-tab.nav-link.active { background-color: #ef4444; }
+    .nav-pills #fatal-tab.nav-link.active { background-color: #b91c1c; }
+    .nav-pills #defaulter-tab.nav-link.active { background-color: #475569; }
+
+    .card-defaulter { 
+      background: white; 
+      border-radius: 8px; 
+      border: 1px solid #e2e8f0; 
+      margin-bottom: 15px; 
+      box-shadow: 0 1px 2px rgba(0,0,0,0.05); 
+      transition: opacity 0.5s ease, transform 0.5s ease;
+    }
+    .case-chip { background: #e2e8f0; padding: 2px 8px; border-radius: 4px; font-family: monospace; font-weight: 700; color: #1e293b; display: inline-block; margin-bottom: 4px; }
+    .case-chip-fatal { background: #fef2f2; border: 1px solid #fca5a5; padding: 2px 8px; border-radius: 4px; font-family: monospace; font-weight: 700; color: #991b1b; display: inline-block; margin-bottom: 4px; }
+
+    .param-list { list-style-type: disc; padding-left: 20px; margin-bottom: 0; }
+    .param-item { color: #dc2626; font-weight: 700; font-size: 0.95rem; }
+
+    .audit-score-badge {
+      background-color: #fef2f2;
+      color: #b91c1c;
+      border: 1px solid #fca5a5;
+      font-size: 1.1rem;
+      font-weight: 800;
+      padding: 6px 14px;
+      border-radius: 6px;
+    }
+
+    .source-badge-reopen {
+      background-color: #fef08a;
+      color: #854d0e;
+      border: 1px solid #facc15;
+      font-weight: 800;
+      font-size: 0.8rem;
+      letter-spacing: 0.5px;
+      padding: 4px 10px;
+    }
+    .source-badge-fcr {
+      background-color: #e0e7ff;
+      color: #3730a3;
+      border: 1px solid #a5b4fc;
+      font-weight: 800;
+      font-size: 0.8rem;
+      letter-spacing: 0.5px;
+      padding: 4px 10px;
+    }
+    .source-badge-default {
+      background-color: #f1f5f9;
+      color: #334155;
+      border: 1px solid #cbd5e1;
+      font-weight: 800;
+      font-size: 0.8rem;
+      letter-spacing: 0.5px;
+      padding: 4px 10px;
+    }
+
+    .dropdown-custom-menu { max-height: 280px; overflow-y: auto; width: 100%; padding: 10px; }
+    .search-box-sticky { position: sticky; top: 0; background: white; z-index: 2; padding-bottom: 8px; }
+  </style>
+</head>
+<body>
+
+<div id="initialPageLoader">
+  <div class="spinner-border text-primary" style="width: 3.5rem; height: 3.5rem;" role="status"></div>
+  <h4 class="mt-3 fw-bold text-dark">Loading Agent Feedback Portal...</h4>
+  <p class="text-muted small">Fetching FMEA and Fatal 0% coaching cases</p>
+</div>
+
+<div id="unauthorizedContainer" class="d-none container text-center py-5 mt-5">
+  <div class="card p-5 shadow-sm border-danger mx-auto" style="max-width: 550px;">
+    <h1 class="text-danger fw-bold mb-3">⛔ Access Denied</h1>
+    <p class="lead">Your email is not listed in the <strong>SME Details</strong> sheet.</p>
+    <div class="alert alert-secondary mb-3">
+      <strong>Logged In Email:</strong> <span id="userEmailSpan">--</span>
+    </div>
+    <p class="text-muted small mb-0">Please contact your Quality Lead or Admin to grant access.</p>
+  </div>
+</div>
+
+<div id="mainPortal" class="d-none">
+  <div class="header-panel shadow-sm">
+    <div class="container-fluid px-4 d-flex justify-content-between align-items-center">
+      <div>
+        <h3 class="fw-bold mb-1">📊 AGENT FEEDBACK PORTAL</h3>
+        <p class="mb-0 opacity-75 small">FMEA Parameters & Fatal 0% Coaching Center</p>
+        <span class="badge bg-primary mt-1" id="loggedInSmeBadge">SME: Loading...</span>
+      </div>
+
+      <div class="d-flex gap-2">
+        <div class="sme-kpi-box">
+          <div class="sme-kpi-val" id="kpiSmeTotalCases">0</div>
+          <div class="sme-kpi-lbl">Total Coaching Cases</div>
+        </div>
+        <div class="sme-kpi-box">
+          <div class="sme-kpi-val text-warning" id="kpiSmeFatalCases">0</div>
+          <div class="sme-kpi-lbl">Fatal Coaching (0%)</div>
+        </div>
+        <div class="sme-kpi-box">
+          <div class="sme-kpi-val text-success" id="kpiSmeCoachingDone">0</div>
+          <div class="sme-kpi-lbl">Coaching Done Count</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="container-fluid px-4">
+    <!-- Main KPI Cards Row -->
+    <div class="row mb-3">
+      <div class="col-md-4 mb-2">
+        <div class="kpi-card">
+          <div class="kpi-title">Average Quality Score (Filtered)</div>
+          <div class="kpi-value text-primary" id="kpiAvgQuality">--%</div>
+        </div>
+      </div>
+      <div class="col-md-4 mb-2">
+        <div class="kpi-card" style="border-left-color: #dc2626;">
+          <div class="kpi-title">Invalid QA Disputes (Filtered)</div>
+          <div class="kpi-value text-danger" id="kpiInvalidDisputes">0</div>
+        </div>
+      </div>
+      <div class="col-md-4 mb-2">
+        <div class="kpi-card" style="border-left-color: #b91c1c;">
+          <div class="kpi-title">Fatal Cases Pending Coaching (0%)</div>
+          <div class="kpi-value text-danger" id="kpiFatalPending">0</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Filters Row -->
+    <div class="row align-items-center mb-3">
+      <div class="col-md-3 mb-2">
+        <label class="form-label fw-bold small">Date From:</label>
+        <input type="date" id="dateFromFilter" class="form-select form-select-sm" onchange="renderView()">
+      </div>
+      <div class="col-md-3 mb-2">
+        <label class="form-label fw-bold small">Date To:</label>
+        <input type="date" id="dateToFilter" class="form-select form-select-sm" onchange="renderView()">
+      </div>
+
+      <!-- Multi-Select Week Dropdown -->
+      <div class="col-md-3 mb-2">
+        <label class="form-label fw-bold small">Filter by Week:</label>
+        <div class="dropdown">
+          <button class="btn btn-outline-secondary btn-sm w-100 text-start d-flex justify-content-between align-items-center" type="button" id="weekDropdownBtn" data-bs-toggle="dropdown" data-bs-auto-close="outside">
+            <span id="selectedWeekText">All Weeks</span>
+            <span class="dropdown-toggle"></span>
+          </button>
+          <div class="dropdown-menu dropdown-custom-menu shadow" aria-labelledby="weekDropdownBtn">
+            <div class="search-box-sticky border-bottom">
+              <div class="d-flex justify-content-between">
+                <button class="btn btn-link btn-sm p-0 text-decoration-none" onclick="selectAllWeeks(true)">Select All</button>
+                <button class="btn btn-link btn-sm p-0 text-decoration-none text-danger" onclick="selectAllWeeks(false)">Deselect All</button>
+              </div>
+            </div>
+            <div id="weekCheckboxContainer" class="pt-2"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-md-3 mb-2">
+        <label class="form-label fw-bold small">Filter by LOB:</label>
+        <select id="lobFilter" class="form-select form-select-sm" onchange="renderView()">
+          <option value="ALL">All LOBs</option>
+        </select>
+      </div>
+
+      <div class="col-md-12 mb-2 mt-1">
+        <label class="form-label fw-bold small">Select Active Agents:</label>
+        <div class="dropdown">
+          <button class="btn btn-outline-secondary btn-sm w-100 text-start d-flex justify-content-between align-items-center" type="button" id="agentDropdownBtn" data-bs-toggle="dropdown" data-bs-auto-close="outside">
+            <span id="selectedAgentText">All Active Agents</span>
+            <span class="dropdown-toggle"></span>
+          </button>
+          <div class="dropdown-menu dropdown-custom-menu shadow" aria-labelledby="agentDropdownBtn">
+            <div class="search-box-sticky border-bottom">
+              <input type="text" id="agentSearchInput" class="form-control form-control-sm mb-2" placeholder="🔍 Search agent..." onkeyup="filterAgentList()">
+              <div class="d-flex justify-content-between">
+                <button class="btn btn-link btn-sm p-0 text-decoration-none" onclick="selectAllAgents(true)">Select All</button>
+                <button class="btn btn-link btn-sm p-0 text-decoration-none text-danger" onclick="selectAllAgents(false)">Deselect All</button>
+              </div>
+            </div>
+            <div id="agentCheckboxContainer" class="pt-2"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- View Switcher Tabs -->
+    <ul class="nav nav-pills mb-3" id="viewTabs">
+      <li class="nav-item">
+        <button class="nav-link active fw-bold me-2" id="fmea-tab" onclick="switchTab('FMEA')">🔥 FMEA Parameters View (6 Red Parameters)</button>
+      </li>
+      <li class="nav-item">
+        <button class="nav-link fw-bold me-2" id="fatal-tab" onclick="switchTab('FATAL')">🚨 Fatal Coaching (All 0% Cases)</button>
+      </li>
+      <li class="nav-item">
+        <button class="nav-link fw-bold" id="defaulter-tab" onclick="switchTab('DEFAULTER_SUMMARY')">📊 Top Defaulter Agents (High Zero Audits)</button>
+      </li>
+    </ul>
+
+    <div id="dashboardContent"></div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+  let rawDashboardData = null;
+  let activeTab = 'FMEA';
+  let allAgentsList = [];
+  let allWeeksList = [];
+
+  window.onload = function() {
+    google.script.run
+      .withSuccessHandler(data => {
+        const loader = document.getElementById('initialPageLoader');
+        if (loader) loader.classList.add('d-none');
+
+        if (!data || !data.authorized) {
+          document.getElementById('userEmailSpan').innerText = data ? data.userEmail : "Unknown User";
+          document.getElementById('unauthorizedContainer').classList.remove('d-none');
+          return;
+        }
+
+        document.getElementById('mainPortal').classList.remove('d-none');
+        document.getElementById('loggedInSmeBadge').innerText = "SME: " + (data.smeName || data.smeEmail);
+
+        rawDashboardData = data;
+        populateFilters();
+        renderView();
+      })
+      .withFailureHandler(err => {
+        const loader = document.getElementById('initialPageLoader');
+        if (loader) {
+          loader.innerHTML = `
+            <div class="card p-4 shadow-sm border-danger text-center">
+              <h4 class="text-danger">Failed to Load Dashboard</h4>
+              <p class="text-muted mb-0">${err.message}</p>
+            </div>
+          `;
+        }
+      })
+      .getDashboardData();
+  };
+
+  function populateFilters() {
+    allWeeksList = rawDashboardData.weeks || [];
+    buildWeekCheckboxes(allWeeksList);
+
+    const combinedRecords = [...rawDashboardData.fmeaData, ...rawDashboardData.fatalData];
+    const lobs = [...new Set(combinedRecords.map(i => i.lob))];
+    const lobSelect = document.getElementById('lobFilter');
+    let lobOptions = ['<option value="ALL">All LOBs</option>'];
+    lobs.forEach(l => lobOptions.push(`<option value="${l}">${l}</option>`));
+    lobSelect.innerHTML = lobOptions.join('');
+
+    allAgentsList = [...new Set(combinedRecords.map(i => i.agent))].sort();
+    buildAgentCheckboxes(allAgentsList);
+  }
+
+  // --- WEEK MULTI-SELECT FUNCTIONS ---
+  function buildWeekCheckboxes(weeks) {
+    const container = document.getElementById('weekCheckboxContainer');
+    let htmlBuffer = [];
+    weeks.forEach((w, idx) => {
+      htmlBuffer.push(`
+        <div class="form-check week-item">
+          <input class="form-check-input week-checkbox" type="checkbox" value="${w}" id="chk_week_${idx}" checked onchange="handleWeekSelectionChange()">
+          <label class="form-check-label" for="chk_week_${idx}">Week ${w}</label>
+        </div>
+      `);
+    });
+    container.innerHTML = htmlBuffer.join('');
+  }
+
+  function getSelectedWeeks() {
+    return Array.from(document.querySelectorAll('.week-checkbox:checked')).map(cb => cb.value);
+  }
+
+  function handleWeekSelectionChange() {
+    const selected = getSelectedWeeks();
+    const btnText = document.getElementById('selectedWeekText');
+
+    if (selected.length === 0) btnText.innerText = "No Weeks";
+    else if (selected.length === allWeeksList.length) btnText.innerText = "All Weeks";
+    else if (selected.length === 1) btnText.innerText = `Week ${selected[0]}`;
+    else btnText.innerText = `${selected.length} Weeks`;
+
+    renderView();
+  }
+
+  function selectAllWeeks(status) {
+    document.querySelectorAll('.week-checkbox').forEach(cb => cb.checked = status);
+    handleWeekSelectionChange();
+  }
+
+  // --- AGENT MULTI-SELECT FUNCTIONS ---
+  function buildAgentCheckboxes(agents) {
+    const container = document.getElementById('agentCheckboxContainer');
+    let htmlBuffer = [];
+    agents.forEach((agent, idx) => {
+      htmlBuffer.push(`
+        <div class="form-check agent-item">
+          <input class="form-check-input agent-checkbox" type="checkbox" value="${agent}" id="chk_agent_${idx}" checked onchange="handleAgentSelectionChange()">
+          <label class="form-check-label text-truncate" style="max-width: 200px;" for="chk_agent_${idx}">${agent}</label>
+        </div>
+      `);
+    });
+    container.innerHTML = htmlBuffer.join('');
+  }
+
+  function filterAgentList() {
+    const searchVal = document.getElementById('agentSearchInput').value.toLowerCase();
+    document.querySelectorAll('#agentCheckboxContainer .agent-item').forEach(item => {
+      const label = item.querySelector('label').innerText.toLowerCase();
+      item.style.display = label.includes(searchVal) ? 'block' : 'none';
+    });
+  }
+
+  function selectAllAgents(status) {
+    document.querySelectorAll('.agent-checkbox').forEach(cb => {
+      if (cb.closest('.agent-item').style.display !== 'none') cb.checked = status;
+    });
+    handleAgentSelectionChange();
+  }
+
+  function getSelectedAgents() {
+    return Array.from(document.querySelectorAll('.agent-checkbox:checked')).map(cb => cb.value);
+  }
+
+  function handleAgentSelectionChange() {
+    const selected = getSelectedAgents();
+    const btnText = document.getElementById('selectedAgentText');
+
+    if (selected.length === 0) btnText.innerText = "No Agents";
+    else if (selected.length === allAgentsList.length) btnText.innerText = "All Active Agents";
+    else btnText.innerText = `${selected.length} Selected`;
+
+    renderView();
+  }
+
+  function switchTab(tab) {
+    activeTab = tab;
+    document.getElementById('fmea-tab').classList.toggle('active', tab === 'FMEA');
+    document.getElementById('fatal-tab').classList.toggle('active', tab === 'FATAL');
+    document.getElementById('defaulter-tab').classList.toggle('active', tab === 'DEFAULTER_SUMMARY');
+    renderView();
+  }
+
+  function renderView() {
+    if (!rawDashboardData) return;
+
+    const selectedWeeks = getSelectedWeeks();
+    const selectedLOB = document.getElementById('lobFilter').value;
+    const selectedAgents = getSelectedAgents();
+
+    const dateFrom = document.getElementById('dateFromFilter').value;
+    const dateTo = document.getElementById('dateToFilter').value;
+
+    const filteredAuditsForKPI = rawDashboardData.allAudits.filter(item => {
+      const itemWeek = String(item.week).replace(/^week\s*/i, '').trim();
+      const matchWeek = selectedWeeks.includes(itemWeek);
+      const matchLOB = (selectedLOB === 'ALL' || item.lob === selectedLOB);
+      const matchAgent = selectedAgents.includes(item.agent);
+
+      let matchDate = true;
+      if (dateFrom || dateTo) {
+        if (!item.auditDate) {
+          matchDate = false;
+        } else {
+          if (dateFrom && item.auditDate < dateFrom) matchDate = false;
+          if (dateTo && item.auditDate > dateTo) matchDate = false;
+        }
+      }
+
+      return matchWeek && matchLOB && matchAgent && matchDate;
+    });
+
+    if (filteredAuditsForKPI.length > 0) {
+      let totalSum = filteredAuditsForKPI.reduce((sum, item) => sum + item.numericScore, 0);
+      let avgScore = (totalSum / filteredAuditsForKPI.length).toFixed(2);
+      document.getElementById('kpiAvgQuality').innerText = avgScore + '%';
+    } else {
+      document.getElementById('kpiAvgQuality').innerText = '0.00%';
+    }
+
+    let dynamicInvalidDisputes = filteredAuditsForKPI.filter(item => item.disputeStatus && item.disputeStatus.includes('invalid')).length;
+    document.getElementById('kpiInvalidDisputes').innerText = dynamicInvalidDisputes;
+
+    const allRecordsMap = new Map();
+    [...rawDashboardData.fmeaData, ...rawDashboardData.fatalData].forEach(item => {
+      if (!allRecordsMap.has(item.caseNumber)) {
+        allRecordsMap.set(item.caseNumber, item);
+      }
+    });
+    const allUniqueRecords = Array.from(allRecordsMap.values());
+
+    const filteredRecords = allUniqueRecords.filter(item => {
+      const itemWeek = String(item.week).replace(/^week\s*/i, '').trim();
+      const matchWeek = selectedWeeks.includes(itemWeek);
+      const matchLOB = (selectedLOB === 'ALL' || item.lob === selectedLOB);
+      const matchAgent = selectedAgents.includes(item.agent);
+
+      let matchDate = true;
+      if (dateFrom || dateTo) {
+        if (!item.auditDate) {
+          matchDate = false;
+        } else {
+          if (dateFrom && item.auditDate < dateFrom) matchDate = false;
+          if (dateTo && item.auditDate > dateTo) matchDate = false;
+        }
+      }
+
+      return matchWeek && matchLOB && matchAgent && matchDate;
+    });
+
+    let pendingCases = filteredRecords.filter(i => !i.existingFeedback || String(i.existingFeedback).trim() === '');
+    let uniquePendingCases = Array.from(new Set(pendingCases.map(i => i.caseNumber)));
+    let fatalPendingCases = pendingCases.filter(i => i.numericScore === 0);
+    let uniqueFatalPendingCases = Array.from(new Set(fatalPendingCases.map(i => i.caseNumber)));
+
+    let completedSet = new Set(rawDashboardData.smeCompletedCaseList || []);
+    let displayedCoachedCount = 0;
+
+    if (selectedAgents.length === allAgentsList.length) {
+      displayedCoachedCount = completedSet.size;
+    } else {
+      let allCoachedRecords = filteredRecords.filter(i => completedSet.has(i.caseNumber) && selectedAgents.includes(i.agent));
+      displayedCoachedCount = new Set(allCoachedRecords.map(i => i.caseNumber)).size;
+    }
+
+    document.getElementById('kpiSmeTotalCases').innerText = uniquePendingCases.length;
+    document.getElementById('kpiSmeFatalCases').innerText = uniqueFatalPendingCases.length;
+    document.getElementById('kpiSmeCoachingDone').innerText = displayedCoachedCount;
+    document.getElementById('kpiFatalPending').innerText = uniqueFatalPendingCases.length;
+
+    const container = document.getElementById('dashboardContent');
+    container.innerHTML = '';
+
+    // LEADERBOARD VIEW
+    if (activeTab === 'DEFAULTER_SUMMARY') {
+      renderTopDefaultersView(filteredAuditsForKPI, filteredRecords, container);
+      return;
+    }
+
+    // FMEA OR FATAL 0% VIEW
+    const currentDataSource = (activeTab === 'FMEA') ? rawDashboardData.fmeaData : rawDashboardData.fatalData;
+    const tabFiltered = currentDataSource.filter(item => {
+      const itemWeek = String(item.week).replace(/^week\s*/i, '').trim();
+      const matchWeek = selectedWeeks.includes(itemWeek);
+      const matchLOB = (selectedLOB === 'ALL' || item.lob === selectedLOB);
+      const matchAgent = selectedAgents.includes(item.agent);
+
+      let matchDate = true;
+      if (dateFrom || dateTo) {
+        if (!item.auditDate) {
+          matchDate = false;
+        } else {
+          if (dateFrom && item.auditDate < dateFrom) matchDate = false;
+          if (dateTo && item.auditDate > dateTo) matchDate = false;
+        }
+      }
+
+      return matchWeek && matchLOB && matchAgent && matchDate;
+    });
+
+    let tabPending = tabFiltered.filter(i => !i.existingFeedback || String(i.existingFeedback).trim() === '');
+
+    if (tabPending.length === 0) {
+      const emptyMsg = (activeTab === 'FMEA') 
+        ? "No FMEA parameter defaulter cases found." 
+        : "No fatal 0% coaching cases pending.";
+      container.innerHTML = `<div class="alert alert-success">${emptyMsg}</div>`;
+      return;
+    }
+
+    let cardsBuffer = [];
+
+    tabPending.forEach((item) => {
+      let paramsHtml = (item.failedParameters && item.failedParameters.length > 0)
+        ? item.failedParameters.map(p => `<li class="param-item">${p}</li>`).join('')
+        : '<li class="text-danger fw-bold">Fatal Defect / 0% Audit Score</li>';
+      
+      let disputeTag = '';
+      if (item.disputeInfo && item.disputeInfo.raised) {
+        let st = item.disputeInfo.status;
+        let isSmePending = item.disputeInfo.smePending;
+
+        if (isSmePending) {
+          disputeTag = `<span class="badge bg-warning text-dark me-1">⏳ QA Dispute Raised (Pending SME Review)</span>`;
+        } else if (st.includes('invalid')) {
+          disputeTag = `<span class="badge bg-danger text-white me-1">⚠️ QA Dispute Raised (Reviewed: Invalid)</span>`;
+        } else if (st.includes('valid')) {
+          disputeTag = `<span class="badge bg-success text-white me-1">✓ QA Dispute Raised (Reviewed: Valid)</span>`;
+        } else {
+          disputeTag = `<span class="badge bg-info text-dark me-1">⚠️ QA Dispute Raised (Pending QTL Review)</span>`;
+        }
+      }
+
+      let sourceTag = '';
+      if (item.sourceType) {
+        let stLower = item.sourceType.toLowerCase();
+        let badgeClass = 'source-badge-default';
+        if (stLower.includes('reopen')) {
+          badgeClass = 'source-badge-reopen';
+        } else if (stLower.includes('fcr')) {
+          badgeClass = 'source-badge-fcr';
+        }
+        sourceTag = `<span class="badge ${badgeClass} me-1"><strong>${item.sourceType.toUpperCase()}</strong></span>`;
+      }
+
+      let feedbackSectionHtml = `
+        <div class="row align-items-center g-2" id="action_box_${item.caseNumber}">
+          <div class="col-md-2 col-sm-4">
+            <input type="text" id="sme_name_${item.caseNumber}" class="form-control form-control-sm" placeholder="SME/TL Name" value="${rawDashboardData.smeName || ''}" style="font-size: 0.8rem;">
+          </div>
+          <div class="col-md-8 col-sm-8">
+            <input type="text" id="feedback_${item.caseNumber}" class="form-control form-control-sm" placeholder="Enter coaching plan for ${item.agent}...">
+          </div>
+          <div class="col-md-2">
+            <button class="btn btn-sm btn-primary w-100" onclick="submitCoaching('${item.agent}', '${item.lob}', ${JSON.stringify(item.failedParameters).replace(/"/g, '&quot;')}, '${item.caseNumber}', 'feedback_${item.caseNumber}', 'sme_name_${item.caseNumber}', 'action_box_${item.caseNumber}', this)">
+              Save Coaching
+            </button>
+          </div>
+        </div>
+      `;
+
+      cardsBuffer.push(`
+        <div class="card card-defaulter p-3 mb-3" id="card_case_${item.caseNumber}">
+          <div class="d-flex justify-content-between align-items-start mb-2">
+            <div>
+              <h5 class="mb-1 fw-bold text-dark">${item.agent}</h5>
+              <span class="badge bg-secondary me-1">${item.lob}</span>
+              <span class="badge bg-light text-dark border me-1">Week: ${item.week}</span>
+              ${sourceTag}
+              ${disputeTag}
+            </div>
+            <div>
+              <span class="audit-score-badge">Audit Score: ${item.auditScore}</span>
+            </div>
+          </div>
+
+          <div class="mb-2">
+            <strong class="text-dark">Parameter Failed (${item.failedParameters.length}):</strong>
+            <ul class="param-list mt-1">
+              ${paramsHtml}
+            </ul>
+          </div>
+
+          <div class="mb-2">
+            <strong>Combined Case Numbers:</strong> <span class="case-chip">${item.caseNumber}</span>
+          </div>
+
+          <div class="bg-light p-2 rounded mb-3 border-start border-3 border-warning">
+            <strong>QA Audit Notes:</strong>
+            <p class="mb-0 small text-muted">${item.coachingNote}</p>
+          </div>
+
+          ${feedbackSectionHtml}
+        </div>
+      `);
+    });
+
+    container.innerHTML = cardsBuffer.join('');
+  }
+
+  function renderTopDefaultersView(filteredAudits, filteredDefaulterRecords, container) {
+    let agentMap = {};
+
+    filteredAudits.forEach(item => {
+      if (!agentMap[item.agent]) {
+        agentMap[item.agent] = {
+          agent: item.agent,
+          lob: item.lob,
+          totalAudits: 0,
+          totalScoreSum: 0,
+          zeroCases: new Set(),
+          allDefaulterCases: new Set(),
+          failedParamsMap: {}
+        };
+      }
+      let ag = agentMap[item.agent];
+      ag.totalAudits++;
+      ag.totalScoreSum += item.numericScore;
+      if (item.numericScore === 0) {
+        ag.zeroCases.add(item.caseNumber);
+      }
+    });
+
+    filteredDefaulterRecords.forEach(item => {
+      if (!agentMap[item.agent]) return;
+      let ag = agentMap[item.agent];
+      ag.allDefaulterCases.add(item.caseNumber);
+      
+      if (item.numericScore === 0) {
+        ag.zeroCases.add(item.caseNumber);
+      }
+
+      let defectList = item.allFailedParameters || item.failedParameters || [];
+      defectList.forEach(p => {
+        ag.failedParamsMap[p] = (ag.failedParamsMap[p] || 0) + 1;
+      });
+    });
+
+    let sortedAgents = Object.values(agentMap).sort((a, b) => {
+      if (b.zeroCases.size !== a.zeroCases.size) {
+        return b.zeroCases.size - a.zeroCases.size;
+      }
+      return b.allDefaulterCases.size - a.allDefaulterCases.size;
+    });
+
+    if (sortedAgents.length === 0) {
+      container.innerHTML = `<div class="alert alert-info">No agent defaulters found for the active filter parameters.</div>`;
+      return;
+    }
+
+    let htmlBuffer = [];
+    htmlBuffer.push(`<h5 class="fw-bold mb-3 text-dark">🚨 Most Defaulter Agents Leaderboard (Ranked by 0% Audits)</h5>`);
+
+    sortedAgents.forEach((ag, rank) => {
+      let avgScore = ag.totalAudits > 0 ? (ag.totalScoreSum / ag.totalAudits).toFixed(1) + "%" : "0%";
+      let zeroCaseArray = Array.from(ag.zeroCases);
+      let allCaseArray = Array.from(ag.allDefaulterCases);
+
+      let zeroChips = zeroCaseArray.map(c => `<span class="case-chip-fatal me-1">${c}</span>`).join('');
+      let otherChips = allCaseArray.filter(c => !ag.zeroCases.has(c)).map(c => `<span class="case-chip me-1">${c}</span>`).join('');
+
+      let topFailedParams = Object.entries(ag.failedParamsMap)
+        .sort((a, b) => b[1] - a[1])
+        .map(([param, count]) => `<li class="param-item">${param} <span class="badge bg-danger ms-1">${count}x</span></li>`)
+        .join('');
+
+      htmlBuffer.push(`
+        <div class="card card-defaulter p-3 mb-3 border-start border-4 border-danger">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <div>
+              <span class="badge bg-dark me-2">#${rank + 1} Rank</span>
+              <h5 class="d-inline fw-bold text-dark">${ag.agent}</h5>
+              <span class="badge bg-secondary ms-2">${ag.lob}</span>
+            </div>
+            <div class="d-flex gap-2">
+              <span class="badge bg-danger fs-6">Fatal 0% Audits: ${ag.zeroCases.size}</span>
+              <span class="badge bg-warning text-dark fs-6">Total Defect Cases: ${ag.allDefaulterCases.size}</span>
+              <span class="badge bg-primary fs-6">Avg Score: ${avgScore}</span>
+            </div>
+          </div>
+
+          <div class="mb-2">
+            <strong class="text-danger">Fatal 0% Case Numbers (${zeroCaseArray.length}):</strong>
+            <div class="mt-1">${zeroChips || '<span class="text-muted small">None</span>'}</div>
+          </div>
+
+          ${otherChips ? `
+            <div class="mb-2">
+              <strong class="text-dark small">Other FMEA Cases:</strong>
+              <div class="mt-1">${otherChips}</div>
+            </div>
+          ` : ''}
+
+          ${topFailedParams ? `
+            <div class="mt-2 bg-light p-2 rounded">
+              <strong class="text-dark small">Most Frequently Failed Parameters:</strong>
+              <ul class="param-list mt-1">
+                ${topFailedParams}
+              </ul>
+            </div>
+          ` : ''}
+        </div>
+      `);
+    });
+
+    container.innerHTML = htmlBuffer.join('');
+  }
+
+  function submitCoaching(agent, lob, failedParameters, caseNumber, inputId, smeInputId, actionBoxId, btn) {
+    const feedback = document.getElementById(inputId).value.trim();
+    const smeName = document.getElementById(smeInputId).value.trim();
+
+    if (!smeName) {
+      alert("Please enter SME / TL Name.");
+      return;
+    }
+
+    if (!feedback) {
+      alert("Please write coaching plan before saving.");
+      return;
+    }
+
+    btn.disabled = true;
+    btn.innerText = "Saving...";
+
+    const saveViewType = (activeTab === 'FMEA') ? 'fmea' : 'fatal';
+
+    google.script.run.withSuccessHandler((res) => {
+      const actionBox = document.getElementById(actionBoxId);
+      const timestampText = (res && res.timestamp) ? res.timestamp : new Date().toLocaleString();
+      const savedSmeName = (res && res.smeName) ? res.smeName : smeName;
+
+      if (actionBox) {
+        actionBox.outerHTML = `
+          <div class="alert alert-success mb-0 border-start border-4 border-success w-100">
+            <div class="d-flex justify-content-between align-items-center mb-1">
+              <span class="fw-bold text-success">✓ Coaching Recorded by ${savedSmeName}:</span>
+              <span class="badge bg-success bg-opacity-25 text-success small" id="timer_${caseNumber}">Auto-clearing in 60s</span>
+            </div>
+            <div class="text-dark fw-medium mb-1">${feedback}</div>
+            <div class="small text-muted opacity-75">Submitted on: ${timestampText}</div>
+          </div>
+        `;
+      }
+
+      if (!rawDashboardData.smeCompletedCaseList.includes(caseNumber)) {
+        rawDashboardData.smeCompletedCaseList.push(caseNumber);
+      }
+
+      const markFeedback = (list) => {
+        let rec = list.find(i => String(i.caseNumber) === String(caseNumber));
+        if (rec) {
+          rec.existingFeedback = feedback;
+          rec.existingSmeName = savedSmeName;
+          rec.feedbackTimestamp = timestampText;
+        }
+      };
+
+      markFeedback(rawDashboardData.fmeaData);
+      markFeedback(rawDashboardData.fatalData);
+
+      const doneElem = document.getElementById('kpiSmeCoachingDone');
+      if (doneElem) {
+        let currentDone = parseInt(doneElem.innerText, 10) || 0;
+        doneElem.innerText = currentDone + 1;
+      }
+
+      let secondsLeft = 60;
+      const ticker = setInterval(() => {
+        secondsLeft--;
+        const badge = document.getElementById(`timer_${caseNumber}`);
+        if (badge && secondsLeft > 0) {
+          badge.innerText = `Auto-clearing in ${secondsLeft}s`;
+        }
+      }, 1000);
+
+      setTimeout(() => {
+        clearInterval(ticker);
+
+        const card = document.getElementById(`card_case_${caseNumber}`);
+        if (card) {
+          card.style.opacity = '0';
+          card.style.transform = 'translateY(-10px)';
+        }
+
+        setTimeout(() => {
+          renderView();
+        }, 500);
+      }, 60000);
+
+    }).withFailureHandler((err) => {
+      btn.disabled = false;
+      btn.innerText = "Save Coaching";
+      alert("Failed to save coaching: " + err.message);
+    }).saveSMEFeedback(agent, lob, saveViewType, failedParameters, caseNumber, feedback, smeName);
+  }
+</script>
+</body>
+</html>

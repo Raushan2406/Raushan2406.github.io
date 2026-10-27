@@ -1,0 +1,1268 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<script>window.DEMO={"intro": "Click \"Run Monday report now\" to run the real email code on sample data, then read the emails it sends.", "back": "index.html#work"};</script>
+<script src="lib/demo-data.js"></script>
+<script src="lib/gas-emu.js"></script>
+<script>
+(function(){
+var D=DEMODATA, A=D.audits({seed:42,weeks:3});
+var rows=[['Week','QA_Email','Auditor','Source_Sheet','Case Number','Agent','LOB','Total_Score_Percent','Audit_Start_Time','Audit_End_Time','Audit_Duration_Minutes','Shift_Date']];
+A.forEach(function(a){rows.push(['',a.qa.email,a.qa.name,a.source,a.caseNo,a.agent,a.lob,a.score===null?'':a.score,D.isoIst(a.start),D.isoIst(a.end),a.dur,'']);});
+var disp=[['Timestamp','Email','Case Number','Auditor','Agent','LOB','Dispute Status','Reason','Agent LOB','','','','','','QTL Dispute Review','','','','','']];
+A.forEach(function(a){ if(a.dispute){ disp.push([new Date(a.end.getTime()+86400000),'agent@demo-qa.com',a.caseNo,a.qa.name,a.agent,a.lob,'Reviewed','Parameter scoring',a.lob,'','','','','',(a.caseNo.charCodeAt(a.caseNo.length-1)%3===0)?'Invalid':'Valid','','','','','']); }});
+var ros=[['Name','Salesforce Name','Shift (IST)','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']];
+D.QAS.forEach(function(q){ros.push([q.name,q.sf,q.shift].concat(['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'].map(function(d){return q.wo.indexOf(d)>-1?'WO':'P';})));});
+DEMO.book('ACTIVE',{Analyze_Data_Sources:rows,'QA Dispute':disp,Roster:ros});
+})();
+
+</script>
+<script>
+DEMO.server=(function(){
+/**
+ * ============================================================================
+ * DAILY TARGETS (480-minute shift)
+ * ============================================================================
+ * Main audits (FCR, Reopen, CSAT, BPO Coaching, General Audit) are counted
+ * against the auditor's LOB daily case target.
+ * Sub-audits (SLA, Need Info Abandoned, ADR, AHT) carry a fixed benchmark in
+ * minutes per case.
+ *
+ * Everything is converted to "credited minutes" so mixed work is comparable:
+ *   main audit case  -> 480 / LOB daily target   (e.g. SSO MPCX: 480/27 = 17.8 min)
+ *   sub-audit case   -> its benchmark minutes     (e.g. SLA First Response: 5 min)
+ * A day is MET when credited minutes >= 480 (= 100% of the LOB target).
+ */
+var SHIFT_MINUTES = 480;
+var DEFAULT_LOB_TARGET = 25;
+
+// Keys are normalized LOB names (lowercase, letters/digits only)
+var LOB_TARGETS = {
+  "ssodisputessff": 40,                 // SSO Disputes (SFF)
+  "ssocustreturnswfs": 32,              // Customer Return (WFS)
+  "customerreturn": 32,
+  "ssompcx": 27,                        // SSO MPCX
+  "ssoinventorymgmt": 25,               // SSO Inventory MGMT
+  "ssosim": 25,                         // SSO S.I.M.
+  "ssoiic": 25,                         // SSO IIC
+  "ssocore": 24,                        // SSO Core
+  "ssoshipmentsfeedisputeswfs": 22,     // SSO Disputes (WFS)
+  "ssodisputeswfs": 22
+};
+
+// Keys are normalized Source_Sheet names; value = benchmark minutes per case
+var SUB_AUDIT_MINUTES = {
+  "slafirstresponse": 5,
+  "needinfoabandoned": 5,
+  "slafirstresolve": 8,
+  "slafinalresolve": 8,
+  "adr": 10,
+  "aht": 10
+};
+
+function normKey(val) {
+  return (val || "").toString().toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+/**
+ * Daily case target for a LOB (exact match on normalized name)
+ */
+function getTargetCasesForLob(lobName) {
+  var t = LOB_TARGETS[normKey(lobName)];
+  return t !== undefined ? t : DEFAULT_LOB_TARGET;
+}
+
+/**
+ * Credited minutes for one audited case
+ */
+function getCaseCreditMinutes(auditCode, caseLob) {
+  var sub = SUB_AUDIT_MINUTES[normKey(auditCode)];
+  if (sub !== undefined) return sub;
+  return SHIFT_MINUTES / getTargetCasesForLob(caseLob);
+}
+
+function isSubAudit(auditCode) {
+  return SUB_AUDIT_MINUTES[normKey(auditCode)] !== undefined;
+}
+
+/**
+ * Calculates the previous Walmart Fiscal Week Number.
+ * Walmart Fiscal Year begins on the Saturday containing Feb 1.
+ * For FY2027 (2026-2027), Week 1 started on Saturday, Jan 31, 2026.
+ * Target for Monday, Aug 31, 2026 is Week 30 (Aug 22 - Aug 28).
+ */
+function getPreviousWalmartWeekNumber() {
+  var d = new Date();
+  // Go back 7 days to get a date inside the target previous week
+  d.setDate(d.getDate() - 7);
+  
+  var currentYear = d.getFullYear();
+  
+  // Find the Saturday containing Feb 1
+  var feb1 = new Date(currentYear, 1, 1); // Feb 1
+  var dayOfWeek = feb1.getDay(); // 0 = Sun, 6 = Sat
+  
+  // Days to subtract to reach the preceding/matching Saturday
+  var daysToSat = (dayOfWeek + 1) % 7; 
+  var fiscalYearStart = new Date(currentYear, 1, 1 - daysToSat);
+  fiscalYearStart.setHours(0, 0, 0, 0);
+
+  // Year-end boundary handling
+  if (d < fiscalYearStart) {
+    feb1 = new Date(currentYear - 1, 1, 1);
+    dayOfWeek = feb1.getDay();
+    daysToSat = (dayOfWeek + 1) % 7;
+    fiscalYearStart = new Date(currentYear - 1, 1, 1 - daysToSat);
+    fiscalYearStart.setHours(0, 0, 0, 0);
+  }
+
+  // Calculate difference in days from Fiscal Start Saturday
+  var diffDays = Math.floor((d.getTime() - fiscalYearStart.getTime()) / (1000 * 3600 * 24));
+
+  // Saturday-Friday 7-day cycles
+  var weekNum = Math.floor(diffDays / 7) + 1;
+  return weekNum.toString();
+}
+
+/**
+ * Helper to parse numeric values safely
+ */
+function parseNumeric(val) {
+  if (typeof val === 'number') return val;
+  if (!val) return 0;
+  var cleaned = val.toString().replace(/[^0-9.-]/g, '');
+  var parsed = parseFloat(cleaned);
+  return isNaN(parsed) ? 0 : parsed;
+}
+
+/**
+ * Helper to parse ISO / String dates
+ */
+function parseIsoDate(dateStr) {
+  if (!dateStr) return null;
+  if (dateStr instanceof Date) return dateStr;
+  var d = new Date(dateStr);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * Helper to compute duration in minutes from start and end time strings
+ */
+function calculateMinutes(startStr, endStr) {
+  var start = parseIsoDate(startStr);
+  var end = parseIsoDate(endStr);
+  if (start && end && end > start) {
+    return (end.getTime() - start.getTime()) / 60000;
+  }
+  return 0;
+}
+
+/**
+ * Normalizes case numbers so 16110622, "16110622" and "16110622.0" all match
+ */
+function normalizeCase(val) {
+  if (val === null || val === undefined) return '';
+  return val.toString().trim().toLowerCase().replace(/\.0+$/, '');
+}
+
+/**
+ * Builds a lookup of case numbers that have a VALID QA dispute.
+ * Same rule as the dashboard: Column O (QTL Dispute Review), falling back to
+ * Column G (Dispute Status); status contains "valid" but not "invalid".
+ * Case number is Column C.
+ */
+function getValidDisputeCaseSet(ss) {
+  var set = {};
+  var dSheet = ss.getSheetByName('QA Dispute');
+  if (!dSheet || dSheet.getLastRow() < 2) return set;
+
+  var vals = dSheet.getRange(2, 1, dSheet.getLastRow() - 1, 20).getValues();
+  vals.forEach(function(d) {
+    var status = d[14] ? d[14].toString().trim() : (d[6] ? d[6].toString().trim() : '');
+    var s = status.toLowerCase();
+    if (s.indexOf('valid') === -1 || s.indexOf('invalid') !== -1) return;
+    var c = normalizeCase(d[2]);
+    if (c) set[c] = true;
+  });
+  return set;
+}
+
+/**
+ * Formats an average score, or "N/A" when none of the audits carry a score
+ */
+function fmtScore(sum, count) {
+  return count > 0 ? (sum / count).toFixed(2) + "%" : "N/A";
+}
+
+/**
+ * >>> USE THIS FUNCTION FOR THE WEEKLY TRIGGER <<<
+ * 1. Pulls the latest audits from the source sheet (and sets roster weeks)
+ * 2. Sends every auditor email + the manager team report
+ * Run it on Monday morning (IST) so every roster week (incl. Sun + Mon week-off
+ * QAs, whose week ends on Saturday) is complete.
+ */
+function runWeeklyReport() {
+  fetchAndConsolidateAuditData();
+  SpreadsheetApp.flush();
+  sendWeeklyAuditorEmails();
+}
+
+/**
+ * Main Execution Function
+ */
+function sendWeeklyAuditorEmails() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  // Consolidated data from all audit tabs (FCR, Reopen, CSAT, BPO Coaching,
+  // AHT, ADR, Need Info Abandoned, SLA First Response / Final Resolve / First Resolve)
+  var sheet = ss.getSheetByName('Analyze_Data_Sources') || ss.getSheetByName('Summary_Data') || ss.getSheets()[0];
+
+  var lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return;
+
+  var values = sheet.getRange(2, 1, lastRow - 1, 12).getValues();
+  var tz = ss.getSpreadsheetTimeZone() || Session.getScriptTimeZone();
+
+  // Valid QA disputes, keyed by case number (from the "QA Dispute" tab)
+  var validDisputeCases = getValidDisputeCaseSet(ss);
+
+  // Week-off schedule per auditor (Roster tab, see 4_Roster.gs)
+  var rosterMap = loadRosterSchedules(ss);
+
+  // Automatically targets previous Walmart Fiscal Week (Returns "30" for Aug 31, 2026)
+  var TARGET_WEEK = getPreviousWalmartWeekNumber(); 
+  var RECENT_CUTOFF_MS = Date.now() - 21 * 24 * 60 * 60 * 1000;
+
+
+  // =========================================================================
+  // ⚙️ TEST MODE CONFIGURATION SWITCH
+  // =========================================================================
+  var IS_TEST_RUN = false; // Set to true for TEST, false for FINAL PRODUCTION
+  var TEST_AUDITOR_EMAIL = "aarav.mehta@demo-qa.com"; // Auditor whose data to calculate
+  var MY_TEST_EMAIL = "raushan.kumar@demo-qa.com"; // Your email inbox
+
+  // Manager team report (Red / Yellow / Green) - sent in the same run
+  var SEND_MANAGER_REPORT = true;
+  var MANAGER_EMAILS = "lead.two@demo-qa.com"; // <-- confirm / edit
+  var MANAGER_CC = "lead.one@demo-qa.com";                                                          // optional
+  // =========================================================================
+
+  var auditorsData = {};
+  var lobAuditorsMap = {};
+
+  for (var i = 0; i < values.length; i++) {
+    var row = values[i];
+
+    var weekNum = row[0] ? row[0].toString().trim() : 'N/A';
+    var qaEmail = row[1] ? row[1].toString().trim().toLowerCase() : '';
+    
+    // Filter out rows that don't match the target week
+    if (!qaEmail || weekNum !== TARGET_WEEK) continue;
+
+    // Filter out rows that don't match target auditor during test runs
+
+    var auditorName = row[2] ? row[2].toString().trim() : 'Auditor';
+    var auditCode = row[3] ? row[3].toString().trim() : 'FCR';
+    var caseNumber = normalizeCase(row[4]);
+    var caseLob = row[6] ? row[6].toString().trim() : 'SSO MPCX';
+    var creditMins = getCaseCreditMinutes(auditCode, caseLob);
+
+    var isDispute = caseNumber !== '' && validDisputeCases[caseNumber] === true;
+    // AHT / ADR / Need Info / SLA audits have no score -> null (excluded from score averages)
+    var hasScore = row[7] !== '' && row[7] !== null && row[7] !== undefined;
+    var qualityScore = hasScore ? parseNumeric(row[7]) : null;
+    var rawStart = row[8] ? row[8].toString().trim() : '';
+    var rawEnd = row[9] ? row[9].toString().trim() : '';
+
+    var duration = parseNumeric(row[10]);
+    if (duration === 0 && rawStart && rawEnd) {
+      duration = calculateMinutes(rawStart, rawEnd);
+    }
+
+    var dateObj = parseIsoDate(rawStart);
+    // Shift date from the QA's roster shift timing (same date used for the Week column)
+    var rowSched = getAuditorSchedule(rosterMap, auditorName, qaEmail);
+    var shiftDate = getShiftDateUtc(rawStart, rowSched);
+    // Safety: week numbers repeat every year, so only audits from the last
+    // 21 days can belong to "last week" (stops old years' rows mixing in)
+    if (!shiftDate || shiftDate.getTime() < RECENT_CUTOFF_MS) continue;
+    var dateFormatted = shiftDate ? Utilities.formatDate(shiftDate, 'UTC', 'yyyy-MM-dd') : '';
+    var dayName = shiftDate ? WEEKDAY_NAMES[shiftDate.getUTCDay()] : 'Other';
+
+    if (!auditorsData[qaEmail]) {
+      auditorsData[qaEmail] = {
+        name: auditorName,
+        email: qaEmail,
+        lob: caseLob, // replaced below by the auditor's main LOB for the week
+        auditCode: auditCode,
+        week: weekNum,
+        schedule: rowSched,
+        records: []
+      };
+    }
+
+    auditorsData[qaEmail].records.push({
+      dateObj: dateObj,
+      dateFormatted: dateFormatted,
+      dayName: dayName,
+      score: qualityScore,
+      duration: duration,
+      isDispute: isDispute,
+      auditCode: auditCode,
+      caseLob: caseLob,
+      creditMins: creditMins,
+      istMin: getIstMinuteOfDay(rawStart),
+      shiftBucket: classifyShiftBucket(rowSched, dayName, getIstMinuteOfDay(rawStart))
+    });
+  }
+
+  var auditorKeys = Object.keys(auditorsData);
+  if (auditorKeys.length === 0) {
+    Logger.log("No matching records found for Walmart Week " + TARGET_WEEK);
+    return;
+  }
+
+  // Group and calculate metrics for Top Performer ranking
+  auditorKeys.forEach(function(email) {
+    var a = auditorsData[email];
+    var totalCases = a.records.length;
+    var totalScoreSum = 0;
+    var scoredCount = 0;
+    var totalDurationSum = 0;
+    var totalCredit = 0;
+    var mainLobCount = {}, anyLobCount = {};
+    var sched = a.schedule || DEFAULT_SCHEDULE;
+    var otCases = 0;
+    var regDays = {};
+    var regDisputes = 0;
+
+    a.records.forEach(function(r) {
+      // Top Performer ranking ignores overtime (audits on a roster week-off day)
+      var isOT = !!sched.wo[WEEKDAY_NAMES.indexOf(r.dayName)];
+      r.isOT = isOT;
+      if (!isOT) {
+        if (r.score !== null) { totalScoreSum += r.score; scoredCount++; }
+        totalDurationSum += r.duration;
+        totalCredit += r.creditMins;
+        if (r.isDispute) regDisputes++;
+        regDays[r.dateFormatted || r.dayName] = true;
+      } else {
+        otCases++;
+      }
+      anyLobCount[r.caseLob] = (anyLobCount[r.caseLob] || 0) + 1;
+      if (!isSubAudit(r.auditCode)) mainLobCount[r.caseLob] = (mainLobCount[r.caseLob] || 0) + 1;
+    });
+
+    // Auditor's LOB = most-audited LOB across main audits (fallback: any audit)
+    var lobPool = Object.keys(mainLobCount).length ? mainLobCount : anyLobCount;
+    a.lob = Object.keys(lobPool).sort(function(x, y) { return lobPool[y] - lobPool[x]; })[0] || a.lob;
+
+    // Ranking figures = regular (non-OT) audits only
+    var regularCases = totalCases - otCases;
+    a.totalCases = totalCases;
+    a.regularCases = regularCases;
+    a.otCases = otCases;
+    a.totalCredit = totalCredit;
+    a.avgScore = scoredCount > 0 ? (totalScoreSum / scoredCount) : 0;
+    a.avgAAT = regularCases > 0 ? (totalDurationSum / regularCases) : 0;
+    a.regDays = Object.keys(regDays).length;
+    a.regAchPct = a.regDays > 0 ? (totalCredit / (a.regDays * SHIFT_MINUTES)) * 100 : 0;
+    a.regDispPct = regularCases > 0 ? (regDisputes / regularCases) * 100 : 0;
+    a.regStatus = ragStatusFor(a.regAchPct, a.regDispPct);
+
+    if (!lobAuditorsMap[a.lob]) {
+      lobAuditorsMap[a.lob] = [];
+    }
+    lobAuditorsMap[a.lob].push(a);
+  });
+
+  // Determine LOB Top Performers
+  // Rules (regular working days only - OT / week-off audits excluded):
+  //   1. Eligible = category Yellow or Green (never Red) and >= TOP_MIN_WORK_DAYS working days
+  //   2. Rank by Target Achievement % (per working day vs LOB target)
+  //   3. Tie-break: lower valid dispute %, then more cases
+  var TOP_MIN_WORK_DAYS = 3;
+  var lobPerformers = {};
+  Object.keys(lobAuditorsMap).forEach(function(lob) {
+    var eligible = lobAuditorsMap[lob].filter(function(a) {
+      return a.regStatus !== "Red" && a.regDays >= TOP_MIN_WORK_DAYS;
+    });
+    eligible.sort(function(x, y) {
+      if (Math.abs(y.regAchPct - x.regAchPct) > 0.001) return y.regAchPct - x.regAchPct;
+      if (Math.abs(x.regDispPct - y.regDispPct) > 0.001) return x.regDispPct - y.regDispPct;
+      return y.regularCases - x.regularCases;
+    });
+
+    if (!eligible.length) {
+      lobPerformers[lob] = { none: true, name: "", auditCount: 0, equivCases: 0, equivPerDay: 0, achPct: 0, avgAAT: 0, avgScore: 0 };
+      return;
+    }
+    var winner = eligible[0];
+    var minsPerCase = SHIFT_MINUTES / getTargetCasesForLob(lob);
+    lobPerformers[lob] = {
+      none: false,
+      name: winner.name,
+      status: winner.regStatus,
+      auditCount: winner.regularCases,
+      equivCases: winner.totalCredit / minsPerCase,
+      equivPerDay: (winner.totalCredit / minsPerCase) / winner.regDays,
+      target: getTargetCasesForLob(lob),
+      achPct: winner.regAchPct,
+      avgAAT: winner.avgAAT,
+      avgScore: winner.avgScore
+    };
+  });
+
+  // Send email dispatch block
+  auditorKeys.forEach(function(email) {
+    // Test mode: only the test auditor's individual email is sent
+    if (IS_TEST_RUN && email !== TEST_AUDITOR_EMAIL.toLowerCase()) return;
+    var auditor = auditorsData[email];
+    var topPerformer = lobPerformers[auditor.lob] || { none: true, name: "", auditCount: 0, equivCases: 0, equivPerDay: 0, achPct: 0, avgAAT: 0, avgScore: 0 };
+    var htmlBody = buildFullWidthEmailHtml(auditor, topPerformer);
+    
+    // In test mode, email goes to MY_TEST_EMAIL with no CC
+    var recipientTo = IS_TEST_RUN ? MY_TEST_EMAIL : auditor.email;
+    var recipientCc = IS_TEST_RUN ? "" : "lead.one@demo-qa.com, lead.two@demo-qa.com, qa.team@demo-qa.com";
+    var emailSubject = (IS_TEST_RUN ? "[TEST ONLY] " : "") + "QA Weekly Performance Report - Walmart Week " + auditor.week + " (" + auditor.name + ")";
+
+    MailApp.sendEmail({
+      to: recipientTo,
+      cc: recipientCc,
+      subject: emailSubject,
+      htmlBody: htmlBody,
+      name : "Raushan Kumar"
+    });
+  });
+
+  // Manager team report - same run, same time
+  if (SEND_MANAGER_REPORT) {
+    var managerHtml = buildManagerTeamReportHtml(auditorsData, lobPerformers, TARGET_WEEK);
+    MailApp.sendEmail({
+      to: IS_TEST_RUN ? MY_TEST_EMAIL : MANAGER_EMAILS,
+      cc: IS_TEST_RUN ? "" : MANAGER_CC,
+      subject: (IS_TEST_RUN ? "[TEST ONLY] " : "") + "QA Team Weekly Report (Red / Yellow / Green) - Walmart Week " + TARGET_WEEK,
+      htmlBody: managerHtml,
+      name : "Raushan Kumar"
+    });
+  }
+}
+
+/**
+ * Builds Email HTML Body with Auto-Fitting Layout including Saturday and Sunday
+ */
+function buildFullWidthEmailHtml(auditor, topPerformer) {
+  // Walmart Fiscal Week runs Saturday through Friday
+  // Day order follows the auditor's own cycle: week-off days first, then working days
+  // (Sat+Sun WO -> Sat..Fri as before; Sun+Mon WO -> Sun, Mon, Tue..Sat)
+  var sched = auditor.schedule || DEFAULT_SCHEDULE;
+  var daysOrder = [];
+  for (var di = 0; di < 7; di++) daysOrder.push(WEEKDAY_NAMES[(sched.cycleStartDay + di) % 7]);
+  var woDayNames = {};
+  sched.wo.forEach(function(isWo, idx) { if (isWo) woDayNames[WEEKDAY_NAMES[idx]] = true; });
+  var dailyMap = {};
+
+  daysOrder.forEach(function(day) {
+    dailyMap[day] = { dateFormatted: "", codes: {} };
+  });
+
+  var totalCases = auditor.records.length;
+  var totalScoreSum = 0;
+  var totalScoredCount = 0;
+  var totalDurationSum = 0;
+  var totalValidDisputes = 0;
+  var typeMap = {}; // per audit type summary for the week
+  var totalCreditMins = 0;
+
+  auditor.records.forEach(function(r) {
+    var hasScore = r.score !== null;
+    if (hasScore) { totalScoreSum += r.score; totalScoredCount++; }
+    totalDurationSum += r.duration;
+    totalCreditMins += r.creditMins;
+
+    var tCode = r.auditCode || "FCR";
+    if (!typeMap[tCode]) typeMap[tCode] = { cases: 0, scoreSum: 0, scored: 0, durationSum: 0, disputes: 0 };
+    typeMap[tCode].cases += 1;
+    typeMap[tCode].durationSum += r.duration;
+    if (hasScore) { typeMap[tCode].scoreSum += r.score; typeMap[tCode].scored += 1; }
+    if (r.isDispute) typeMap[tCode].disputes += 1;
+    if (r.isDispute) totalValidDisputes++;
+
+    if (dailyMap[r.dayName]) {
+      if (r.dateFormatted) dailyMap[r.dayName].dateFormatted = r.dateFormatted;
+      
+      var cCode = r.auditCode || "FCR";
+      if (!dailyMap[r.dayName].codes[cCode]) {
+        dailyMap[r.dayName].codes[cCode] = { cases: 0, scoreSum: 0, scored: 0, durationSum: 0, disputes: 0, credit: 0 };
+      }
+      
+      dailyMap[r.dayName].codes[cCode].cases += 1;
+      if (hasScore) {
+        dailyMap[r.dayName].codes[cCode].scoreSum += r.score;
+        dailyMap[r.dayName].codes[cCode].scored += 1;
+      }
+      dailyMap[r.dayName].codes[cCode].durationSum += r.duration;
+      dailyMap[r.dayName].codes[cCode].credit += r.creditMins;
+      if (r.isDispute) dailyMap[r.dayName].codes[cCode].disputes += 1;
+    }
+  });
+
+  // Calculate active days based on days that had at least 1 audit
+  // Active days = scheduled working days with audits; week-off (overtime) days add credit, not target
+  var workedDays = daysOrder.filter(function(d) { return Object.keys(dailyMap[d].codes).length > 0; });
+  var workedNonWo = workedDays.filter(function(d) { return !woDayNames[d]; }).length;
+  var activeDays = workedNonWo > 0 ? workedNonWo : (workedDays.length || 1);
+  var overallDisputePct = totalCases > 0 ? ((totalValidDisputes / totalCases) * 100) : 0;
+  var overallAvgScoreStr = fmtScore(totalScoreSum, totalScoredCount);
+  var overallAvgAAT = totalCases > 0 ? (totalDurationSum / totalCases) : 0;
+  var overallAvgAuditPerDay = (totalCases / activeDays).toFixed(1);
+  var overallOccupancyMins = totalDurationSum;
+  var maxTotalCapacity = activeDays * 480;
+  var overallOccupancyLeft = Math.max(0, maxTotalCapacity - overallOccupancyMins);
+  var isUserTopPerformer = !topPerformer.none && (auditor.name.toLowerCase() === topPerformer.name.toLowerCase());
+
+  var dailyTargetCases = getTargetCasesForLob(auditor.lob);
+  var minsPerMainCase = SHIFT_MINUTES / dailyTargetCases;
+  // Weekly target achievement = credited minutes vs 480 x active days
+  var weeklyAchievementPct = (totalCreditMins / maxTotalCapacity) * 100;
+  var weeklyEquivCases = totalCreditMins / minsPerMainCase;
+  var achColor = weeklyAchievementPct >= 100 ? "#047857" : "#b91c1c";
+  var dailyRowsHtml = "";
+  
+  daysOrder.forEach(function(day) {
+    var d = dailyMap[day];
+    var codeKeys = Object.keys(d.codes);
+    var dayDateStr = d.dateFormatted ? `<br/><span style="color: #475569; font-weight: normal; font-size: 11px; white-space: nowrap;">${d.dateFormatted}</span>` : "";
+    var dayBottomBorder = "2px solid #64748b";
+
+    if (codeKeys.length === 0) {
+      dailyRowsHtml += `
+        <tr style="border-bottom: ${dayBottomBorder}; text-align: center; color: #0f172a; font-size: 12px;">
+          <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; font-weight: 700; text-align: left; background-color: #ffffff; white-space: nowrap;">${day}${dayDateStr}</td>
+          <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; white-space: nowrap;">-</td>
+          <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; white-space: nowrap;">${auditor.lob}</td>
+          <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; font-weight: 700; white-space: nowrap;">${auditor.name}</td>
+          <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; white-space: nowrap;">0</td>
+          <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; white-space: nowrap;">0</td>
+          <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; white-space: nowrap;">0.00%</td>
+          <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; white-space: nowrap;">-</td>
+          <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; white-space: nowrap;">-</td>
+          <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; white-space: nowrap;">0</td>
+          <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; white-space: nowrap;">${auditor.week}</td>
+          <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; white-space: nowrap;">0.00</td>
+          <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; white-space: nowrap;">-</td>
+          <td style="padding: 8px 6px; white-space: nowrap;"><span style="color: #64748b; font-weight: 700;">${woDayNames[day] ? 'Week Off' : 'No Audits'}</span></td>
+        </tr>
+      `;
+    } else {
+      var totalDayOcc = 0;
+      var totalDayCases = 0;
+      var totalDayDisputes = 0;
+      var totalDayScoreSum = 0;
+      var totalDayScored = 0;
+      var totalDayDurationSum = 0;
+      var totalDayCredit = 0;
+
+      codeKeys.forEach(function(ck) {
+        var c = d.codes[ck];
+        totalDayCredit += c.credit;
+        totalDayOcc += c.durationSum;
+        totalDayCases += c.cases;
+        totalDayDisputes += c.disputes;
+        totalDayScoreSum += c.scoreSum;
+        totalDayScored += c.scored;
+        totalDayDurationSum += c.durationSum;
+      });
+
+      // Target is met when credited minutes reach the 480-minute shift
+      var dayAchPct = (totalDayCredit / SHIFT_MINUTES) * 100;
+      var dayEquiv = totalDayCredit / minsPerMainCase;
+      var isMet = totalDayCredit >= SHIFT_MINUTES - 0.01;
+      var achLine = `<br/><span style="font-size: 10.5px; font-weight: 700; color: #334155;">${dayEquiv.toFixed(1)} / ${dailyTargetCases} eq. (${dayAchPct.toFixed(0)}%)</span>`;
+      var statusBadge = woDayNames[day]
+        ? `<span style="background-color: #ede9fe; color: #5b21b6; padding: 4px 8px; border-radius: 8px; font-weight: 800; font-size: 11px; border: 1px solid #c4b5fd; display: inline-block; white-space: nowrap;">➕ OVERTIME (WO)</span><br/><span style="font-size: 10.5px; font-weight: 700; color: #334155;">+${dayEquiv.toFixed(1)} eq. bonus</span>`
+        : (isMet 
+        ? `<span style="background-color: #dcfce7; color: #14532d; padding: 4px 8px; border-radius: 8px; font-weight: 800; font-size: 11px; border: 1px solid #86efac; display: inline-block; white-space: nowrap;">✓ MET</span>`
+        : `<span style="background-color: #fee2e2; color: #991b1b; padding: 4px 8px; border-radius: 8px; font-weight: 800; font-size: 11px; border: 1px solid #fca5a5; display: inline-block; white-space: nowrap;">⚠️ BELOW TARGET</span>`) + achLine;
+
+      var hasMultipleCodes = codeKeys.length > 1;
+      var dayRowSpan = hasMultipleCodes ? (codeKeys.length + 1) : 1;
+
+      codeKeys.forEach(function(code, idx) {
+        var cData = d.codes[code];
+        var cCases = cData.cases;
+        var cDisputes = cData.disputes;
+        var cDisputePct = cCases > 0 ? ((cDisputes / cCases) * 100).toFixed(2) + "%" : "0.00%";
+        var cAvgScore = fmtScore(cData.scoreSum, cData.scored);
+        var cAvgAAT = cCases > 0 ? (cData.durationSum / cCases).toFixed(2) : "-";
+        var cOccupancy = cData.durationSum;
+        var cOccupancyLeft = Math.max(0, 480 - cOccupancy).toFixed(2);
+
+        var rowBottomBorder = (!hasMultipleCodes) ? dayBottomBorder : "1px solid #cbd5e1";
+
+        if (idx === 0) {
+          dailyRowsHtml += `
+            <tr style="border-bottom: ${rowBottomBorder}; text-align: center; color: #0f172a; font-size: 12px; background-color: #ffffff;">
+              <td rowspan="${dayRowSpan}" style="padding: 8px 6px; border-right: 2px solid #64748b; font-weight: 800; font-size: 12.5px; text-align: left; vertical-align: middle; background-color: #ffffff; color: #0f172a; white-space: nowrap;">${day}${dayDateStr}</td>
+              <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; font-weight: 800; color: #1e40af; white-space: nowrap;">${code}</td>
+              <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; color: #334155; white-space: nowrap;">${auditor.lob}</td>
+              <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; font-weight: 700; color: #0f172a; white-space: nowrap;">${auditor.name}</td>
+              <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; color: #1d4ed8; font-weight: 800; font-size: 13px; white-space: nowrap;">${cCases}</td>
+              <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; color: #b91c1c; font-weight: 700; white-space: nowrap;">${cDisputes}</td>
+              <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; color: #b91c1c; font-weight: 700; white-space: nowrap;">${cDisputePct}</td>
+              <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; color: #047857; font-weight: 800; font-size: 13px; white-space: nowrap;">${cAvgScore}</td>
+              <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; color: #334155; font-weight: 600; white-space: nowrap;">${cAvgAAT}</td>
+              <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; color: #334155; white-space: nowrap;">${cCases}</td>
+              <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; color: #334155; white-space: nowrap;">${auditor.week}</td>
+              <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; color: #4338ca; font-weight: 800; white-space: nowrap;">${cOccupancy.toFixed(2)}</td>
+              <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; color: #be185d; font-weight: 700; white-space: nowrap;">${cOccupancyLeft}</td>
+              <td rowspan="${dayRowSpan}" style="padding: 8px 6px; vertical-align: middle; background-color: #ffffff; border-left: 1px solid #cbd5e1; white-space: nowrap;">${statusBadge}</td>
+            </tr>
+          `;
+        } else {
+          dailyRowsHtml += `
+            <tr style="border-bottom: ${rowBottomBorder}; text-align: center; color: #0f172a; font-size: 12px; background-color: #f8fafc;">
+              <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; font-weight: 800; color: #b91c1c; border-left: 3px solid #3b82f6; white-space: nowrap;">${code}</td>
+              <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; color: #334155; white-space: nowrap;">${auditor.lob}</td>
+              <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; font-weight: 700; color: #0f172a; white-space: nowrap;">${auditor.name}</td>
+              <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; color: #1d4ed8; font-weight: 800; font-size: 13px; white-space: nowrap;">${cCases}</td>
+              <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; color: #b91c1c; font-weight: 700; white-space: nowrap;">${cDisputes}</td>
+              <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; color: #b91c1c; font-weight: 700; white-space: nowrap;">${cDisputePct}</td>
+              <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; color: #047857; font-weight: 800; font-size: 13px; white-space: nowrap;">${cAvgScore}</td>
+              <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; color: #334155; font-weight: 600; white-space: nowrap;">${cAvgAAT}</td>
+              <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; color: #334155; white-space: nowrap;">${cCases}</td>
+              <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; color: #334155; white-space: nowrap;">${auditor.week}</td>
+              <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; color: #4338ca; font-weight: 800; white-space: nowrap;">${cOccupancy.toFixed(2)}</td>
+              <td style="padding: 8px 6px; border-right: 1px solid #cbd5e1; color: #be185d; font-weight: 700; white-space: nowrap;">${cOccupancyLeft}</td>
+            </tr>
+          `;
+        }
+      });
+
+      if (hasMultipleCodes) {
+        var dayAvgDisputePct = totalDayCases > 0 ? ((totalDayDisputes / totalDayCases) * 100).toFixed(2) + "%" : "0.00%";
+        var dayAvgQualityScore = fmtScore(totalDayScoreSum, totalDayScored);
+        var dayAvgAATCalculated = totalDayCases > 0 ? (totalDayDurationSum / totalDayCases).toFixed(2) : "-";
+        var dayTotalOccupancyLeft = Math.max(0, 480 - totalDayOcc).toFixed(2);
+
+        dailyRowsHtml += `
+          <tr style="border-bottom: ${dayBottomBorder}; text-align: center; font-size: 12px; font-weight: 800; background-color: #eff6ff; color: #1e3a8a;">
+            <td style="padding: 8px 6px; border-right: 1px solid #93c5fd; color: #1e40af; text-align: left; font-style: italic; white-space: nowrap;">↳ Daily Total (${day})</td>
+            <td style="padding: 8px 6px; border-right: 1px solid #93c5fd; white-space: nowrap;">${auditor.lob}</td>
+            <td style="padding: 8px 6px; border-right: 1px solid #93c5fd; white-space: nowrap;">${auditor.name}</td>
+            <td style="padding: 8px 6px; border-right: 1px solid #93c5fd; color: #1d4ed8; font-size: 13px; white-space: nowrap;">${totalDayCases}</td>
+            <td style="padding: 8px 6px; border-right: 1px solid #93c5fd; color: #b91c1c; white-space: nowrap;">${totalDayDisputes}</td>
+            <td style="padding: 8px 6px; border-right: 1px solid #93c5fd; color: #b91c1c; white-space: nowrap;">${dayAvgDisputePct}</td>
+            <td style="padding: 8px 6px; border-right: 1px solid #93c5fd; color: #047857; font-size: 13px; white-space: nowrap;">${dayAvgQualityScore}</td>
+            <td style="padding: 8px 6px; border-right: 1px solid #93c5fd; white-space: nowrap;">${dayAvgAATCalculated}</td>
+            <td style="padding: 8px 6px; border-right: 1px solid #93c5fd; white-space: nowrap;">${totalDayCases}</td>
+            <td style="padding: 8px 6px; border-right: 1px solid #93c5fd; white-space: nowrap;">${auditor.week}</td>
+            <td style="padding: 8px 6px; border-right: 1px solid #93c5fd; color: #4338ca; white-space: nowrap;">${totalDayOcc.toFixed(2)}</td>
+            <td style="padding: 8px 6px; border-right: 1px solid #93c5fd; color: #be185d; white-space: nowrap;">${dayTotalOccupancyLeft}</td>
+          </tr>
+        `;
+      }
+    }
+  });
+
+  // Per audit type summary rows (FCR, Reopen, CSAT, AHT, ADR, SLA..., etc.)
+  var typeOrder = Object.keys(typeMap).sort(function(a, b) { return typeMap[b].cases - typeMap[a].cases; });
+  var typeRowsHtml = "";
+  typeOrder.forEach(function(code) {
+    var tm = typeMap[code];
+    var tDisputePct = tm.cases > 0 ? ((tm.disputes / tm.cases) * 100).toFixed(2) + "%" : "0.00%";
+    var tAAT = tm.cases > 0 ? (tm.durationSum / tm.cases).toFixed(2) : "-";
+    typeRowsHtml += `
+      <tr style="border-bottom: 1px solid #cbd5e1; text-align: center; font-size: 12px; color: #0f172a;">
+        <td style="padding: 7px 8px; border-right: 1px solid #cbd5e1; text-align: left; font-weight: 800; color: #1e40af; white-space: nowrap;">${code}</td>
+        <td style="padding: 7px 8px; border-right: 1px solid #cbd5e1; color: #1d4ed8; font-weight: 800;">${tm.cases}</td>
+        <td style="padding: 7px 8px; border-right: 1px solid #cbd5e1; color: #b91c1c; font-weight: 700;">${tm.disputes}</td>
+        <td style="padding: 7px 8px; border-right: 1px solid #cbd5e1; color: #b91c1c; font-weight: 700;">${tDisputePct}</td>
+        <td style="padding: 7px 8px; border-right: 1px solid #cbd5e1; color: #047857; font-weight: 800;">${fmtScore(tm.scoreSum, tm.scored)}</td>
+        <td style="padding: 7px 8px; border-right: 1px solid #cbd5e1;">${tAAT}</td>
+        <td style="padding: 7px 8px; color: #4338ca; font-weight: 800;">${tm.durationSum.toFixed(2)}</td>
+      </tr>
+    `;
+  });
+
+  return `
+  <!DOCTYPE html>
+  <html>
+  <head><meta charset="utf-8"></head>
+  <body style="background-color: #f1f5f9; color: #0f172a; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 10px;">
+    
+    <div style="width: fit-content; min-width: 100%; background-color: #ffffff; border-radius: 8px; border: 1px solid #cbd5e1; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); padding: 14px; box-sizing: border-box;">
+      
+      <p style="font-size: 13px; margin-top: 0; color: #0f172a;">Hi <strong>${auditor.name}</strong>,</p>
+      <p style="font-size: 13.5px; color: #334155; margin-bottom: 16px;">
+        Below is your complete performance and occupancy summary for <strong>Walmart Week ${auditor.week}</strong> (${auditor.lob}):
+      </p>
+
+      <!-- HIGHLIGHTS GRID -->
+      <div style="background-color: #f8fafc; border: 1px solid #94a3b8; border-radius: 8px; padding: 14px; margin-bottom: 16px;">
+        <h3 style="margin: 0 0 10px 0; font-size: 14.5px; color: #1e3a8a; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 800;">
+          📊 Weekly Summary Highlights
+        </h3>
+        <table style="width: 100%; border-collapse: collapse; font-size: 13.5px; color: #0f172a;">
+          <tr>
+            <td style="padding: 4px 8px; width: 33%;"><strong>Auditor LOB:</strong> ${auditor.lob}</td>
+            <td style="padding: 4px 8px; width: 33%;"><strong>Daily Case Target:</strong> ${dailyTargetCases} cases/day</td>
+            <td style="padding: 4px 8px; width: 34%;"><strong>Walmart Week:</strong> ${auditor.week}</td>
+          </tr>
+          <tr>
+            <td style="padding: 4px 8px;"><strong>Shift:</strong> ${sched.shiftLabel}</td>
+            <td style="padding: 4px 8px;"><strong>Week Off:</strong> ${daysOrder.filter(function(d){ return woDayNames[d]; }).map(function(d){ return d.substring(0,3); }).join(' + ')}</td>
+            <td style="padding: 4px 8px;"></td>
+          </tr>
+          <tr>
+            <td style="padding: 4px 8px;"><strong>Total Cases Audited:</strong> ${totalCases}</td>
+            <td style="padding: 4px 8px;"><strong>Valid QA Disputes:</strong> ${totalValidDisputes}</td>
+            <td style="padding: 4px 8px;"><strong>Dispute %:</strong> ${overallDisputePct.toFixed(2)}%</td>
+          </tr>
+          <tr>
+            <td style="padding: 4px 8px;"><strong>Average Quality Score:</strong> <span style="color: #047857; font-weight: 800;">${overallAvgScoreStr}</span></td>
+            <td style="padding: 4px 8px;"><strong>Average Audit Time (AAT):</strong> ${overallAvgAAT.toFixed(2)} mins</td>
+            <td style="padding: 4px 8px;"><strong>Average Audit / Day:</strong> ${overallAvgAuditPerDay}</td>
+          </tr>
+          <tr>
+            <td style="padding: 4px 8px;"><strong>Total Occupancy:</strong> ${overallOccupancyMins.toFixed(2)} mins</td>
+            <td style="padding: 4px 8px;"><strong>Occupancy Left:</strong> ${overallOccupancyLeft.toFixed(2)} mins</td>
+            <td style="padding: 4px 8px;"><strong>Target Achievement:</strong> <span style="color: ${achColor}; font-weight: 800;">${weeklyAchievementPct.toFixed(1)}%</span> (${weeklyEquivCases.toFixed(1)} eq. cases / ${(dailyTargetCases * activeDays)})</td>
+          </tr>
+        </table>
+      </div>
+
+      <!-- LOB TOP PERFORMER SPOTLIGHT BOX -->
+      <div style="background-color: #f0fdf4; border: 1px solid #4ade80; border-radius: 8px; padding: 14px; margin-bottom: 16px;">
+        <div style="font-size: 13px; color: #14532d; line-height: 1.5;">
+          🏆 <strong>LOB Top Performer Spotlight (${auditor.lob}):</strong>
+          ${topPerformer.none
+            ? `No QA in <strong>${auditor.lob}</strong> qualified as Top Performer this week. To qualify, a QA must be in the <strong>Green or Yellow</strong> category with at least 3 working days (overtime / week-off audits are not counted).`
+            : `The top performer for <strong>${auditor.lob}</strong> this week is <strong>${topPerformer.name}</strong> with <strong>${topPerformer.achPct.toFixed(1)}% target achievement</strong> (${topPerformer.equivPerDay.toFixed(1)} of ${topPerformer.target} equivalent cases per day, ${topPerformer.auditCount} audits, AAT ${topPerformer.avgAAT.toFixed(2)} mins). Overtime / week-off audits are not counted.`}
+          <br/>
+          🚀 <em>${isUserTopPerformer 
+            ? "<strong>Congratulations! You are the Top Performer this week! Keep up the stellar work!</strong>" 
+            : "Keep striving for quality excellence and push your metrics to claim the #1 Top Performer spot next week!"}</em>
+        </div>
+      </div>
+
+      <!-- DAILY TARGET REQUIREMENT CALLOUT -->
+      <div style="background-color: #fffbe6; border-left: 4px solid #d97706; border-radius: 4px; padding: 10px 14px; margin-bottom: 20px;">
+        <div style="color: #92400e; font-weight: 800; font-size: 13px;">⚠️ Daily Target Requirement</div>
+        <div style="color: #334155; font-size: 12.5px; margin-top: 2px;">
+          For <strong>${auditor.lob}</strong>, your required daily target is <strong>${dailyTargetCases} cases/day</strong> (based on full-shift 480 minute capacity).
+          FCR / Reopen / CSAT / BPO Coaching / General audits count as 1 case each (${minsPerMainCase.toFixed(1)} min credit).
+          Sub-audits are credited at their benchmark: <strong>SLA First Response 5 min</strong>, <strong>Need Info Abandoned 5 min</strong>,
+          <strong>SLA First Resolve 8 min</strong>, <strong>SLA Final Resolve 8 min</strong>, <strong>ADR 10 min</strong>, <strong>AHT 10 min</strong>.
+          A day is <strong>MET</strong> when total credit reaches 480 minutes (shown as equivalent cases).
+        </div>
+      </div>
+
+      <!-- AUDIT TYPE SUMMARY TABLE -->
+      <h3 style="margin: 0 0 10px 0; font-size: 14px; color: #1e3a8a; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 800;">
+        🗂️ Audit Type Summary
+      </h3>
+      <table style="border-collapse: collapse; border: 2px solid #1e40af; margin-bottom: 20px; font-size: 11px; min-width: 60%;">
+        <thead>
+          <tr style="background-color: #1e40af; color: #ffffff; text-align: center; font-weight: 800; font-size: 11px;">
+            <th style="padding: 8px; border-right: 1px solid #3b82f6; text-align: left;">AUDIT TYPE</th>
+            <th style="padding: 8px; border-right: 1px solid #3b82f6;">CASES</th>
+            <th style="padding: 8px; border-right: 1px solid #3b82f6;">VALID DISPUTES</th>
+            <th style="padding: 8px; border-right: 1px solid #3b82f6;">DISPUTE %</th>
+            <th style="padding: 8px; border-right: 1px solid #3b82f6;">AVG SCORE</th>
+            <th style="padding: 8px; border-right: 1px solid #3b82f6;">AVG AAT (M)</th>
+            <th style="padding: 8px;">OCCUPANCY (M)</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${typeRowsHtml}
+        </tbody>
+      </table>
+      <p style="font-size: 11px; color: #64748b; margin: -12px 0 18px 0;">Avg Score shows N/A for audit types that are not scored (AHT, ADR, Need Info Abandoned, SLA audits).</p>
+
+      <!-- DAILY BREAKDOWN TABLE -->
+      <h3 style="margin: 0 0 10px 0; font-size: 14px; color: #1e3a8a; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 800;">
+        📅 Daily Metrics Breakdown
+      </h3>
+      <div style="width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch;">
+        <table style="width: 100%; border-collapse: collapse; border: 2px solid #1e40af; margin-bottom: 20px; font-size: 11px;">
+          <thead>
+            <tr style="background-color: #1e40af; color: #ffffff; text-align: center; font-weight: 800; font-size: 11px; letter-spacing: 0.2px;">
+              <th style="padding: 10px 4px; border-right: 1px solid #3b82f6; text-align: left; white-space: nowrap;">DAY / DATE</th>
+              <th style="padding: 10px 4px; border-right: 1px solid #3b82f6; white-space: nowrap;">AUDIT CODE</th>
+              <th style="padding: 10px 4px; border-right: 1px solid #3b82f6; white-space: nowrap;">AUDITOR LOB</th>
+              <th style="padding: 10px 4px; border-right: 1px solid #3b82f6; white-space: nowrap;">AUDITOR NAME</th>
+              <th style="padding: 10px 4px; border-right: 1px solid #3b82f6; white-space: nowrap;">TOTAL CASES</th>
+              <th style="padding: 10px 4px; border-right: 1px solid #3b82f6;">VALID DISPUTES</th>
+              <th style="padding: 10px 4px; border-right: 1px solid #3b82f6; white-space: nowrap;">DISPUTE %</th>
+              <th style="padding: 10px 4px; border-right: 1px solid #3b82f6; white-space: nowrap;">AVG SCORE</th>
+              <th style="padding: 10px 4px; border-right: 1px solid #3b82f6; white-space: nowrap;">AVG AAT (M)</th>
+              <th style="padding: 10px 4px; border-right: 1px solid #3b82f6;">AVG AUDIT / DAY</th>
+              <th style="padding: 10px 4px; border-right: 1px solid #3b82f6; white-space: nowrap;">WEEK</th>
+              <th style="padding: 10px 4px; border-right: 1px solid #3b82f6; white-space: nowrap;">OCCUPANCY (M)</th>
+              <th style="padding: 10px 4px; border-right: 1px solid #3b82f6;">OCCUPANCY LEFT (M)</th>
+              <th style="padding: 10px 4px; white-space: nowrap;">STATUS</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${dailyRowsHtml}
+            
+            <!-- GRAND TOTAL / AVERAGE ROW -->
+            <tr style="background-color: #dbeafe; text-align: center; font-weight: 800; color: #1e3a8a; font-size: 12px; border-top: 3px solid #1e40af;">
+              <td style="padding: 10px 4px; border-right: 1px solid #93c5fd; text-align: left; white-space: nowrap;">TOTAL / AVG</td>
+              <td style="padding: 10px 4px; border-right: 1px solid #93c5fd; white-space: nowrap;">-</td>
+              <td style="padding: 10px 4px; border-right: 1px solid #93c5fd; white-space: nowrap;">${auditor.lob}</td>
+              <td style="padding: 10px 4px; border-right: 1px solid #93c5fd; white-space: nowrap;">${auditor.name}</td>
+              <td style="padding: 10px 4px; border-right: 1px solid #93c5fd; color: #1d4ed8; font-size: 13px; white-space: nowrap;">${totalCases}</td>
+              <td style="padding: 10px 4px; border-right: 1px solid #93c5fd; color: #b91c1c; white-space: nowrap;">${totalValidDisputes}</td>
+              <td style="padding: 10px 4px; border-right: 1px solid #93c5fd; color: #b91c1c; white-space: nowrap;">${overallDisputePct.toFixed(2)}%</td>
+              <td style="padding: 10px 4px; border-right: 1px solid #93c5fd; color: #047857; font-size: 13px; white-space: nowrap;">${overallAvgScoreStr}</td>
+              <td style="padding: 10px 4px; border-right: 1px solid #93c5fd; white-space: nowrap;">${overallAvgAAT.toFixed(2)}</td>
+              <td style="padding: 10px 4px; border-right: 1px solid #93c5fd; white-space: nowrap;">${overallAvgAuditPerDay}</td>
+              <td style="padding: 10px 4px; border-right: 1px solid #93c5fd; white-space: nowrap;">${auditor.week}</td>
+              <td style="padding: 10px 4px; border-right: 1px solid #93c5fd; color: #4338ca; white-space: nowrap;">${overallOccupancyMins.toFixed(2)}</td>
+              <td style="padding: 10px 4px; border-right: 1px solid #93c5fd; color: #be185d; white-space: nowrap;">${overallOccupancyLeft.toFixed(2)}</td>
+              <td style="padding: 10px 4px; white-space: nowrap;">-</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- KEY FOCUS AREAS -->
+      <div style="background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 14px; margin-bottom: 20px;">
+        <h3 style="margin: 0 0 8px 0; font-size: 13.5px; color: #1e3a8a; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 800;">
+          🎯 Key Focus Areas for Next Week:
+        </h3>
+        <ul style="margin: 0; padding-left: 18px; font-size: 14px; line-height: 1.7; color: #334155;">
+          <li>Ensure daily case audit targets are met according to your assigned LOB (<strong>${dailyTargetCases} cases/day</strong>, or the equivalent mix of sub-audits).</li>
+          <li>Maintain average audit time (AAT) close to target operational bounds.</li>
+          <li>Focus on consistent scoring guidelines to maintain high audit quality across all shifts.</li>
+          <li>Strive for continuous improvement in audit throughput to qualify for top-performer honors.</li>
+        </ul>
+      </div>
+
+      <!-- SIGNATURE -->
+      <p style="font-size: 13px; color: #4b5563; margin-bottom: 4px;">Best regards,</p>
+      <p style="font-size: 14px; font-weight: 800; color: #1e3a8a; margin-top: 0;">QA Team</p>
+      
+    </div>
+  </body>
+  </html>
+  `;
+}
+/**
+ * ============================================================================
+ * ROSTER-BASED WEEK MAPPING
+ * ============================================================================
+ * Walmart weeks run Saturday -> Friday. An auditor whose week-off is not
+ * Sat+Sun (e.g. Sun+Mon WO, working Tue -> Sat) would otherwise have their
+ * Saturday counted in the NEXT week.
+ *
+ * Rule used: each auditor's "work cycle" = their week-off block followed by
+ * their working days (e.g. Sun, Mon(WO) + Tue..Sat). The whole cycle gets
+ * the Walmart week of the MIDDLE working day (Tue..Sat -> Thursday).
+ *   - Sat+Sun WO (or not on roster): identical to the normal Walmart week.
+ *   - Sun+Mon WO: Saturday stays in the same week as Tue..Fri.
+ *   - Audits done on a week-off day count toward the cycle that follows it.
+ *
+ * SHIFT DATE: each audit belongs to the IST shift it was done in, using the
+ * QA's roster shift. Only early-morning audits move to the previous day:
+ *   Night shift (ends after midnight, e.g. 19:00-04:00):
+ *       00:00 .. shift end + 4h (08:00)  -> previous day's shift
+ *   Day shift (e.g. 09:00-18:00):
+ *       00:00 .. shift start - 4h (05:00) -> previous day's shift (late overtime)
+ *   Everything else stays on its own IST date, so daytime audits are never
+ *   moved even if the QA was on a different shift in the past (rotation).
+ * QAs not on the roster use a 05:30 IST cut-off (= UTC date, old behaviour).
+ */
+var IST_OFFSET_MIN = 330;          // UTC+05:30
+var SHIFT_CUTOFF_BEFORE_MIN = 240; // 4-hour buffer around shift start / end
+var DEFAULT_CUTOFF_MIN = 330;      // 05:30 IST = 00:00 UTC
+var SHIFT_GRACE_MIN = 30;          // in-shift window = shift start/end +/- 30 min
+var ROSTER_SHEET_NAME = 'Roster';
+var WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+var DAY_MS = 24 * 60 * 60 * 1000;
+
+function rosterNameKey(v) {
+  return (v || '').toString().toLowerCase().replace(/[^a-z]/g, '');
+}
+
+/**
+ * Builds a schedule from 7 week-off flags (index 0 = Sunday ... 6 = Saturday)
+ */
+function buildSchedule(wo, shiftStartMin, shiftLabel, shiftEndMin) {
+  var woCount = wo.filter(function(x) { return x; }).length;
+  if (woCount === 0 || woCount === 7) {
+    wo = [true, false, false, false, false, false, true]; // default Sat + Sun
+    woCount = 2;
+  }
+  // First working day after the longest week-off run
+  var best = -1, bestRun = -1;
+  for (var d = 0; d < 7; d++) {
+    if (wo[d] || !wo[(d + 6) % 7]) continue;
+    var run = 0, p = (d + 6) % 7;
+    while (wo[p] && run < 7) { run++; p = (p + 6) % 7; }
+    if (run > bestRun) { bestRun = run; best = d; }
+  }
+  return {
+    wo: wo,
+    woCount: woCount,
+    firstWorkDay: best,                              // e.g. 2 = Tuesday
+    cycleStartDay: (best - bestRun + 7) % 7,         // first day of the WO block
+    shiftLabel: shiftLabel || 'Not on roster',
+    shiftStartMin: (shiftStartMin === null || shiftStartMin === undefined) ? null : shiftStartMin,
+    shiftEndMin: (shiftEndMin === null || shiftEndMin === undefined) ? null : shiftEndMin,
+    cutoffMin: computeCutoffMin(shiftStartMin, shiftEndMin),
+    isDefault: false
+  };
+}
+
+var DEFAULT_SCHEDULE = (function() {
+  var s = buildSchedule([true, false, false, false, false, false, true]);
+  s.isDefault = true;
+  return s;
+})();
+
+/**
+ * Reads the Roster tab -> { nameKey: schedule }
+ * Keys: Salesforce Name and Name (letters only, lowercase).
+ */
+function loadRosterSchedules(ss) {
+  var map = {};
+  var sh = ss.getSheetByName(ROSTER_SHEET_NAME);
+  if (!sh || sh.getLastRow() < 2) {
+    Logger.log('Roster tab not found or empty - using standard Sat-Fri weeks for everyone.');
+    return map;
+  }
+  // Display values so shift times read exactly as shown (e.g. "19:00 - 04:00")
+  var vals = sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getDisplayValues();
+  var hdr = vals[0].map(function(h) { return h.toString().trim().toLowerCase(); });
+
+  var sfCol = hdr.findIndex(function(h) { return h.indexOf('salesforce') !== -1; });
+  var nameCol = hdr.indexOf('name');
+  var shiftCol = hdr.findIndex(function(h) { return h.indexOf('shift') !== -1 && h.indexOf('ist') !== -1; });
+  var startCol = hdr.indexOf('start');
+  var endCol = hdr.indexOf('end');
+  var dayCols = WEEKDAY_NAMES.map(function(dn) { return hdr.indexOf(dn.toLowerCase()); });
+  if (dayCols.some(function(c) { return c === -1; })) {
+    Logger.log('Roster is missing Monday..Sunday columns - using standard weeks.');
+    return map;
+  }
+
+  for (var i = 1; i < vals.length; i++) {
+    var r = vals[i];
+    var wo = dayCols.map(function(c) { return r[c].toString().trim().toUpperCase() === 'WO'; });
+    var shiftText = shiftCol !== -1 ? r[shiftCol].toString().trim() : '';
+    var startMin = parseClockMinutes(shiftText.split('-')[0]);
+    if (startMin === null && startCol !== -1) startMin = parseClockMinutes(r[startCol]);
+    var endMin = parseClockMinutes(shiftText.split('-')[1]);
+    if (endMin === null && endCol !== -1) endMin = parseClockMinutes(r[endCol]);
+    var label = shiftText || (startMin !== null ? r[startCol] + ' - ' + (endCol !== -1 ? r[endCol] : '') : '');
+    var sched = buildSchedule(wo, startMin, label ? label + ' IST' : '', endMin);
+    [sfCol, nameCol].forEach(function(c) {
+      if (c === -1) return;
+      var k = rosterNameKey(r[c]);
+      if (k) map[k] = sched;
+    });
+  }
+  return map;
+}
+
+/**
+ * Finds an auditor's schedule by auditor name, then by email (firstname.lastname@)
+ */
+function getAuditorSchedule(rosterMap, auditorName, email) {
+  var k1 = rosterNameKey(auditorName);
+  if (k1 && rosterMap[k1]) return rosterMap[k1];
+  var k2 = rosterNameKey((email || '').toString().split('@')[0]);
+  if (k2 && rosterMap[k2]) return rosterMap[k2];
+  return DEFAULT_SCHEDULE;
+}
+
+/**
+ * Early-morning cut-off (minutes after midnight IST): audits before it
+ * belong to the previous day's shift.
+ */
+function computeCutoffMin(startMin, endMin) {
+  if (startMin === null || startMin === undefined) return DEFAULT_CUTOFF_MIN;
+  var crossesMidnight = endMin !== null && endMin !== undefined && endMin < startMin;
+  if (crossesMidnight) return Math.min(endMin + SHIFT_CUTOFF_BEFORE_MIN, 12 * 60); // night: end + 4h (max noon)
+  return Math.max(startMin - SHIFT_CUTOFF_BEFORE_MIN, 0);                          // day: start - 4h
+}
+
+/**
+ * IST minutes after midnight for an Audit_Start_Time value (null if unreadable)
+ */
+function getIstMinuteOfDay(startVal) {
+  if (!startVal) return null;
+  var d = startVal instanceof Date ? startVal : new Date(startVal.toString().trim());
+  if (isNaN(d.getTime())) return null;
+  var ist = new Date(d.getTime() + IST_OFFSET_MIN * 60000);
+  return ist.getUTCHours() * 60 + ist.getUTCMinutes();
+}
+
+/**
+ * Classifies one audit: "WO" (roster week-off day), "IN" (within shift hours),
+ * "EXTRA" (working day, outside shift hours) or "UNKNOWN" (no shift on roster)
+ */
+function classifyShiftBucket(sched, dayName, istMin) {
+  sched = sched || DEFAULT_SCHEDULE;
+  if (sched.wo[WEEKDAY_NAMES.indexOf(dayName)]) return "WO";
+  if (sched.shiftStartMin === null || sched.shiftEndMin === null || istMin === null) return "UNKNOWN";
+  var s = (sched.shiftStartMin - SHIFT_GRACE_MIN + 1440) % 1440;
+  var e = (sched.shiftEndMin + SHIFT_GRACE_MIN) % 1440;
+  var inside = s <= e ? (istMin >= s && istMin <= e) : (istMin >= s || istMin <= e);
+  return inside ? "IN" : "EXTRA";
+}
+
+/**
+ * "19:00" / "9:00" / "19:00:00" -> minutes after midnight (null if unreadable)
+ */
+function parseClockMinutes(v) {
+  var m = (v || '').toString().trim().match(/^(\d{1,2}):(\d{2})/);
+  if (!m) return null;
+  var h = parseInt(m[1], 10), mi = parseInt(m[2], 10);
+  if (h > 23 || mi > 59) return null;
+  return h * 60 + mi;
+}
+
+/**
+ * Shift date (as a UTC-midnight Date) for an Audit_Start_Time value,
+ * based on the QA's IST shift.
+ */
+function getShiftDateUtc(startVal, sched) {
+  if (!startVal) return null;
+  var d = startVal instanceof Date ? startVal : new Date(startVal.toString().trim());
+  if (isNaN(d.getTime())) return null;
+  sched = sched || DEFAULT_SCHEDULE;
+
+  var ist = new Date(d.getTime() + IST_OFFSET_MIN * 60000);       // IST wall clock in UTC fields
+  var tod = ist.getUTCHours() * 60 + ist.getUTCMinutes();
+  var shift = Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate());
+  if (tod < sched.cutoffMin) shift -= DAY_MS;   // early-morning tail of the previous shift
+  return new Date(shift);
+}
+
+/**
+ * Same result as the old sheet formula:
+ * WEEKNUM(date - 28 - MOD(WEEKDAY(date), 7))
+ */
+function walmartWeekOf(dateUtc) {
+  var satOffset = (dateUtc.getUTCDay() + 1) % 7;               // days back to Saturday
+  var x = new Date(dateUtc.getTime() - (satOffset + 28) * DAY_MS);
+  var jan1 = new Date(Date.UTC(x.getUTCFullYear(), 0, 1));
+  var doy = Math.round((x.getTime() - jan1.getTime()) / DAY_MS);
+  return Math.floor((doy + jan1.getUTCDay()) / 7) + 1;
+}
+
+/**
+ * Roster-adjusted Walmart week for one audit
+ */
+function getRosterWeek(startVal, sched) {
+  sched = sched || DEFAULT_SCHEDULE;
+  var date = getShiftDateUtc(startVal, sched);
+  if (!date) return '';
+
+  var dow = date.getUTCDay();
+  var workStart;
+  if (sched.wo[dow]) {
+    // Worked on a week-off day -> belongs to the upcoming cycle
+    workStart = new Date(date.getTime() + ((sched.firstWorkDay - dow + 7) % 7) * DAY_MS);
+  } else {
+    workStart = new Date(date.getTime() - ((dow - sched.firstWorkDay + 7) % 7) * DAY_MS);
+  }
+  var workDays = 7 - sched.woCount;
+  var middle = new Date(workStart.getTime() + Math.floor((workDays - 1) / 2) * DAY_MS);
+  return walmartWeekOf(middle);
+}
+
+/**
+ * Writes Week values into column A of Analyze_Data_Sources.
+ *   - Rows with a blank Week are always filled.
+ *   - Rows whose audit started on/after fromDate are recalculated (so the
+ *     current and last week always follow the current Roster).
+ *   - forceAll = true recalculates every row with the CURRENT roster.
+ * First run: the old ARRAYFORMULA results are frozen as values, so history
+ * (when shifts / week-offs may have been different) is not rewritten.
+ */
+function fillRosterWeeks(sheet, forceAll, fromDate) {
+  var ss = sheet.getParent();
+  var lastRow = sheet.getLastRow();
+  var a1 = sheet.getRange('A1');
+  if (a1.getFormula() !== '') {
+    var frozen = lastRow >= 2 ? sheet.getRange(2, 1, lastRow - 1, 1).getValues() : [];
+    a1.setValue('Week');
+    if (frozen.length) sheet.getRange(2, 1, frozen.length, 1).setValues(frozen);
+    Logger.log('Old Week formula replaced; ' + frozen.length + ' existing week values kept.');
+  } else if (a1.getValue() === '') {
+    a1.setValue('Week');
+  }
+  if (lastRow < 2) return;
+
+  var fromMs = fromDate ? fromDate.getTime() : null;
+  var data = sheet.getRange(2, 1, lastRow - 1, 9).getValues(); // A..I
+  var rosterMap = loadRosterSchedules(ss);
+  var out = [], changed = 0, unmatched = {};
+
+  for (var i = 0; i < data.length; i++) {
+    var row = data[i];
+    var current = row[0];
+    var caseNum = row[4];
+    if (caseNum === '' || caseNum === null) { out.push([current]); continue; }
+
+    var isBlank = current === '' || current === null;
+    var isRecent = false;
+    if (fromMs !== null) {
+      var st = row[8] instanceof Date ? row[8] : new Date((row[8] || '').toString().trim());
+      isRecent = !isNaN(st.getTime()) && st.getTime() >= fromMs;
+    }
+    if (!forceAll && !isBlank && !isRecent) { out.push([current]); continue; }
+
+    var sched = getAuditorSchedule(rosterMap, row[2], row[1]);
+    if (sched.isDefault && row[2]) unmatched[row[2]] = true;
+    var wk = getRosterWeek(row[8], sched);
+    if (String(wk) !== String(current)) changed++;
+    out.push([wk]);
+  }
+
+  sheet.getRange(2, 1, out.length, 1).setValues(out);
+  Logger.log('Week column updated: ' + changed + ' rows changed' + (forceAll ? ' (full recalculation)' : '') + '.');
+  var um = Object.keys(unmatched);
+  if (um.length) Logger.log('Not on roster (standard Sat-Fri week used): ' + um.join(', '));
+}
+
+/**
+ * Recalculate weeks for audits from a given date onward, with the current
+ * roster. Example: recalculateWeeksFrom('2026-10-17')
+ */
+function recalculateWeeksFrom(isoDate) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Analyze_Data_Sources');
+  fillRosterWeeks(sheet, false, new Date(isoDate + 'T00:00:00Z'));
+}
+
+/**
+ * Recalculates the Week for ALL rows using the CURRENT roster.
+ * Only use this if the roster has been the same for the whole history;
+ * otherwise use recalculateWeeksFrom('yyyy-mm-dd').
+ */
+function recalculateAllWeeks() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Analyze_Data_Sources');
+  fillRosterWeeks(sheet, true);
+}
+/* Demo-only helpers. The live project has its own versions of these three functions in other files;
+   these are simplified rebuilds so the weekly email code can run in the portfolio demo. */
+function fetchAndConsolidateAuditData() {
+  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Analyze_Data_Sources');
+  fillRosterWeeks(sh, true);
+}
+function ragStatusFor(achPct, dispPct) {
+  if (achPct >= 100 && dispPct <= 2) return 'Green';
+  if (achPct >= 90 && dispPct <= 4) return 'Yellow';
+  return 'Red';
+}
+function buildManagerTeamReportHtml(auditorsData, lobPerformers, week) {
+  var col = { Green: ['#dcfce7', '#14532d'], Yellow: ['#fef3c7', '#92400e'], Red: ['#fee2e2', '#991b1b'] };
+  var list = Object.keys(auditorsData).map(function (k) { return auditorsData[k]; });
+  var order = { Red: 0, Yellow: 1, Green: 2 };
+  list.sort(function (a, b) { return (order[a.regStatus] - order[b.regStatus]) || a.regAchPct - b.regAchPct; });
+  var counts = { Green: 0, Yellow: 0, Red: 0 };
+  list.forEach(function (a) { counts[a.regStatus]++; });
+  var th = 'padding:8px 6px;border-right:1px solid #3b82f6;white-space:nowrap;';
+  var td = 'padding:7px 6px;border-right:1px solid #cbd5e1;white-space:nowrap;text-align:center;';
+  var rows = list.map(function (a) {
+    var b = { IN: 0, EXTRA: 0, WO: 0, UNKNOWN: 0 };
+    a.records.forEach(function (r) { b[r.shiftBucket] = (b[r.shiftBucket] || 0) + 1; });
+    var c = col[a.regStatus];
+    var sc = a.records.filter(function (r) { return r.score !== null && !r.isOT; });
+    var avg = sc.length ? (sc.reduce(function (s, r) { return s + r.score; }, 0) / sc.length).toFixed(2) + '%' : 'N/A';
+    return '<tr style="border-bottom:1px solid #cbd5e1;font-size:12px;color:#0f172a;">' +
+      '<td style="' + td + 'text-align:left;font-weight:700;">' + a.name + '</td><td style="' + td + '">' + a.lob + '</td>' +
+      '<td style="' + td + '">' + (a.schedule && a.schedule.shiftLabel || '-') + '</td><td style="' + td + '">' + a.regDays + '</td>' +
+      '<td style="' + td + 'color:#1d4ed8;font-weight:800;">' + a.regularCases + '</td><td style="' + td + 'color:#5b21b6;font-weight:700;">' + a.otCases + '</td>' +
+      '<td style="' + td + 'font-weight:800;">' + a.regAchPct.toFixed(1) + '%</td><td style="' + td + '">' + avg + '</td>' +
+      '<td style="' + td + '">' + a.avgAAT.toFixed(2) + '</td><td style="' + td + 'color:#b91c1c;">' + a.regDispPct.toFixed(2) + '%</td>' +
+      '<td style="' + td + '">' + b.IN + ' / ' + b.EXTRA + ' / ' + b.WO + '</td>' +
+      '<td style="padding:7px 6px;text-align:center;"><span style="background:' + c[0] + ';color:' + c[1] + ';padding:3px 10px;border-radius:10px;font-weight:800;font-size:11px;">' + a.regStatus + '</span></td></tr>';
+  }).join('');
+  var tops = Object.keys(lobPerformers).sort().map(function (l) {
+    var t = lobPerformers[l];
+    return '<li><strong>' + l + ':</strong> ' + (t.none ? 'No eligible QA this week' : t.name + ' (' + t.achPct.toFixed(1) + '% target achievement, ' + t.auditCount + ' audits)') + '</li>';
+  }).join('');
+  return '<div style="font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#0f172a;font-size:13px;">' +
+    '<p>Hi Team,</p><p>Below is the QA team summary for <strong>Walmart Week ' + week + '</strong>. Categories use regular working days only; overtime (week-off) audits are shown separately.</p>' +
+    '<table style="border-collapse:collapse;margin:10px 0 16px;"><tr>' +
+    ['Green', 'Yellow', 'Red'].map(function (k) { return '<td style="padding:10px 18px;background:' + col[k][0] + ';color:' + col[k][1] + ';font-weight:800;border-radius:8px;">' + k + ': ' + counts[k] + '</td><td style="width:8px"></td>'; }).join('') +
+    '</tr></table>' +
+    '<p style="font-size:12px;color:#475569;">Green = 100%+ target and dispute rate 2% or less. Yellow = 90%+ target and dispute rate 4% or less. Red = everything else.</p>' +
+    '<div style="overflow-x:auto"><table style="border-collapse:collapse;border:2px solid #1e40af;font-size:11px;"><thead><tr style="background:#1e40af;color:#fff;font-weight:800;">' +
+    ['QA', 'LOB', 'Shift', 'Work days', 'Audits', 'OT audits', 'Target ach.', 'Avg score', 'AAT (m)', 'Dispute %', 'In shift / Extra / WO', 'Status'].map(function (h) { return '<th style="' + th + '">' + h + '</th>'; }).join('') +
+    '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
+    '<h3 style="font-size:14px;color:#1e3a8a;margin-top:18px;">LOB top performers</h3><ul>' + tops + '</ul><p>Best regards,<br><strong>QA Team</strong></p></div>';
+}
+function getConsoleData() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var ros = ss.getSheetByName('Roster').getDataRange().getValues();
+  var n = ss.getSheetByName('Analyze_Data_Sources').getLastRow() - 1;
+  return { targetWeek: getPreviousWalmartWeekNumber(), audits: n, roster: ros };
+}
+
+;return {buildFullWidthEmailHtml:buildFullWidthEmailHtml,buildManagerTeamReportHtml:buildManagerTeamReportHtml,buildSchedule:buildSchedule,calculateMinutes:calculateMinutes,classifyShiftBucket:classifyShiftBucket,computeCutoffMin:computeCutoffMin,fetchAndConsolidateAuditData:fetchAndConsolidateAuditData,fillRosterWeeks:fillRosterWeeks,fmtScore:fmtScore,getAuditorSchedule:getAuditorSchedule,getCaseCreditMinutes:getCaseCreditMinutes,getConsoleData:getConsoleData,getIstMinuteOfDay:getIstMinuteOfDay,getPreviousWalmartWeekNumber:getPreviousWalmartWeekNumber,getRosterWeek:getRosterWeek,getShiftDateUtc:getShiftDateUtc,getTargetCasesForLob:getTargetCasesForLob,getValidDisputeCaseSet:getValidDisputeCaseSet,isSubAudit:isSubAudit,loadRosterSchedules:loadRosterSchedules,normKey:normKey,normalizeCase:normalizeCase,parseClockMinutes:parseClockMinutes,parseIsoDate:parseIsoDate,parseNumeric:parseNumeric,ragStatusFor:ragStatusFor,recalculateAllWeeks:recalculateAllWeeks,recalculateWeeksFrom:recalculateWeeksFrom,rosterNameKey:rosterNameKey,runWeeklyReport:runWeeklyReport,sendWeeklyAuditorEmails:sendWeeklyAuditorEmails,walmartWeekOf:walmartWeekOf};
+})();
+if(DEMO.init) DEMO.init();
+</script>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Weekly QA Email · Demo</title>
+<style>
+:root{--ink:#0f172a;--muted:#475569;--line:#cbd5e1;--blue:#1e40af;--bg:#f1f5f9}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;font-size:14px}
+header{background:#1e3a8a;color:#fff;padding:18px max(16px,env(safe-area-inset-left,0px))}
+header h1{margin:0;font-size:20px}header p{margin:4px 0 0;opacity:.85}
+main{max-width:1100px;margin:0 auto;padding:18px max(16px,env(safe-area-inset-left,0px)) 90px}
+.card{background:#fff;border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:14px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
+.k{border-left:4px solid var(--blue);background:#f8fafc;border-radius:8px;padding:10px 12px}.k span{display:block;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--muted)}.k b{font-size:20px}
+button.run{background:#16a34a;color:#fff;border:0;border-radius:8px;padding:11px 18px;font-weight:800;font-size:14px;cursor:pointer}
+button.run[disabled]{opacity:.6;cursor:wait}
+table{border-collapse:collapse;width:100%;font-size:12.5px}th{background:var(--blue);color:#fff;text-align:left;padding:7px 8px;white-space:nowrap}td{padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+.wo{background:#ede9fe;color:#5b21b6;font-weight:700;border-radius:6px;padding:1px 6px}.scroll{overflow-x:auto}
+ol{margin:6px 0 0;padding-left:20px;color:var(--muted)}li{margin:3px 0}
+#log{font-family:ui-monospace,Consolas,monospace;font-size:12.5px;color:#334155;white-space:pre-wrap;margin-top:10px}
+</style></head>
+<body>
+<header><h1>📧 QA Weekly Performance Report · Automation</h1><p>Google Apps Script time trigger: every Monday 09:00 IST → <code>runWeeklyReport()</code></p></header>
+<main>
+  <div class="card">
+    <div class="grid">
+      <div class="k"><span>Target week</span><b id="kWeek">–</b></div>
+      <div class="k"><span>Audits in data sheet</span><b id="kAud">–</b></div>
+      <div class="k"><span>QAs on roster</span><b id="kQa">–</b></div>
+      <div class="k"><span>Emails per run</span><b id="kMail">–</b></div>
+    </div>
+    <p style="margin:14px 0 6px;color:var(--muted)">What one run does:</p>
+    <ol><li>Recalculates each audit's Walmart week from the roster (week-offs and night shifts).</li><li>Builds each QA's weekly report: daily breakdown, audit types, target achievement, disputes, overtime.</li><li>Picks the top performer per LOB and sends every QA their email (CC leads).</li><li>Sends the manager the Red / Yellow / Green team report.</li></ol>
+    <p style="margin-top:14px"><button class="run" id="runBtn" type="button">▶ Run Monday report now</button></p>
+    <div id="log"></div>
+  </div>
+  <div class="card"><h3 style="margin:0 0 10px">Roster (shift and week-off used for week mapping)</h3><div class="scroll"><table id="ros"></table></div></div>
+</main>
+<script>
+window.onload=function(){
+  google.script.run.withSuccessHandler(function(d){
+    document.getElementById('kWeek').textContent='Week '+d.targetWeek;
+    document.getElementById('kAud').textContent=d.audits.toLocaleString();
+    document.getElementById('kQa').textContent=d.roster.length-1;
+    document.getElementById('kMail').textContent=(d.roster.length-1)+' + 1';
+    var h=d.roster[0];
+    document.getElementById('ros').innerHTML='<thead><tr>'+h.map(function(x){return '<th>'+x+'</th>';}).join('')+'</tr></thead><tbody>'+d.roster.slice(1).map(function(r){return '<tr>'+r.map(function(v){return '<td>'+(v==='WO'?'<span class="wo">WO</span>':v)+'</td>';}).join('')+'</tr>';}).join('')+'</tbody>';
+  }).getConsoleData();
+  document.getElementById('runBtn').addEventListener('click',function(){
+    var b=this, log=document.getElementById('log'); b.disabled=true; b.textContent='Running…'; log.textContent='runWeeklyReport() started…';
+    var t0=Date.now();
+    google.script.run.withSuccessHandler(function(){
+      b.disabled=false; b.textContent='▶ Run Monday report now';
+      log.textContent='Done in '+((Date.now()-t0)/1000).toFixed(1)+' s. '+DEMO.outbox.length+' emails sent. Opening the sent emails…';
+      DEMO.openOutbox(0);
+    }).withFailureHandler(function(e){ b.disabled=false; b.textContent='▶ Run Monday report now'; log.textContent='Error: '+e.message; }).runWeeklyReport();
+  });
+};
+</script>
+</body></html>

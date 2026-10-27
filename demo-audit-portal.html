@@ -1,0 +1,3058 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<script>window.DEMO={"user": "aarav.mehta@demo-qa.com", "mail": false, "intro": "You are signed in as a sample QA. Pick an audit code, click Fetch Next, then answer the checklist and submit.", "back": "index.html#work"};</script>
+<script src="lib/demo-data.js"></script>
+<script src="lib/gas-emu.js"></script>
+<script>
+(function(){
+var D=DEMODATA, R=D.rng(3), me=D.QAS[0];
+var detail=[['Name','Email']].concat(D.QAS.map(function(q){return [q.name,q.email];}));
+function pick(a){return a[Math.floor(R()*a.length)];}
+var cats=['Disputes>Enhanced Returns','Item Setup>Variant Group','Orders>Cancellation','Payments>Reimbursement','Inventory>Inbound Discrepancy','Listing>Brand Gating'];
+var n=16800000;
+function cases(k){var a=[];for(var i=0;i<k;i++)a.push(String(n+=7+Math.floor(R()*90)));return a;}
+var sheets={Detail:detail};
+['Reopen','FCR','SLA_First_Resolve','SLA_First_Response','SLA_Final_Resolve','General Audit'].forEach(function(s){
+  var rows=[['Case Number','LOB','QA Salesforce Name','Category HASH']];
+  cases(12).forEach(function(c){rows.push([c,me.lob,me.name,pick(cats)]);});
+  cases(4).forEach(function(c){rows.push([c,'SSO Core','Priya Nair',pick(cats)]);});
+  sheets[s]=rows;});
+var csat=[['Case Number','LOB','QA Salesforce Name','Category HASH','Agent Salesforce Name','Response Value','Survey Sent Date','Survey Completed Date']];
+cases(10).forEach(function(c){csat.push([c,me.lob,me.name,pick(cats),pick(D.AGENTS),pick(['1','2','2','3']),'2026-10-1'+Math.floor(R()*9),'2026-10-2'+Math.floor(R()*7)]);});
+sheets.CSAT=csat;
+var bpo=[['Case Number','LOB','QA Salesforce Name','Agent Salesforce Name',"Description of seller's issue",'How should the agent have handled the case?','Jira Ticket','KBs for agent to review','Issues/Coachings']];
+cases(8).forEach(function(c){bpo.push([c,me.lob,me.name,pick(D.AGENTS),'Seller asked why the reimbursement was lower than the item price.','Explain the reimbursement policy and share the claim breakdown.','JIRA-'+(4000+Math.floor(R()*900)),'KB-'+(100000+Math.floor(R()*9000)),'Incomplete resolution']);});
+sheets['BPO Coaching']=bpo;
+['Need Info Abandoned','ADR','AHT'].forEach(function(s){
+  var rows=[['Week','Case Number','Case Owner','Case LOB','Need Info Abandoned','Category HASH','QA Salesforce Name']];
+  if(s!=='Need Info Abandoned') rows[0].pop();
+  cases(10).forEach(function(c){var r=['37',c,pick(D.AGENTS),me.lob,s==='Need Info Abandoned'?pick(['Yes','No']):'',pick(cats)]; if(s==='Need Info Abandoned') r.push(me.name); rows.push(r);});
+  sheets[s]=rows;});
+sheets.Notice=[['Type','Title','Subtitle','Content'],
+ ['NOTICE','Calibration session','Live','Thursday 4 PM: FCR calibration for all QAs. Bring two cases you found hard to score.'],
+ ['REMINDER','Dropdown Instruction','','If the case was handled by another team, select Other > Handled By Another Team. Do not type it in Remarks.'],
+ ['REMINDER','Parameter Instruction','','Q10 Case status: check that the agent set the right status (Need Info, Need Info Internal, Verify).'],
+ ['REMINDER','Parameter Instruction','','Never select N/A for "Reopen Reason Acknowledged" on Reopen audits. It is only N/A for FCR.'],
+ ['REMINDER','Parameter Instruction','','Mark parameters that do not apply to your LOB as N/A (for example IRIS in WFS Disputes).']];
+DEMO.book('AUDIT_SS',sheets);
+DEMO.book('HR_SS',{Sheet1:[['Seller / Template']].concat(['Brightline Home','Kestrel Outdoor','Maple & Co','Nimbus Electronics','Orchid Living','Pioneer Pet Supplies','Quarry Tools','Riverbend Kitchen'].map(function(x){return [x];}))});
+var ros=[['ACT ID','Name','Email','LOB','Manager','Shift','Salesforce Name']];
+D.AGENTS.forEach(function(a,i){ros.push(['ACT'+(1000+i),a,'',me.lob,'','',a]);});
+DEMO.book('ROSTER_SS',{Roster:ros});
+})();
+
+</script>
+<script>
+DEMO.server=(function(){
+const SPREADSHEET_ID = 'AUDIT_SS';
+const SKIPPED_SHEET_NAME = 'SkippedCases';
+const HR_SPREADSHEET_ID = 'HR_SS';
+const ROSTER_SPREADSHEET_ID = 'ROSTER_SS';
+
+function doGet() {
+  return HtmlService.createTemplateFromFile('index')
+    .evaluate()
+    .setTitle('QA Audit Portal - Acuitty Tech')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+function getUserEmail() {
+  return Session.getActiveUser().getEmail();
+}
+
+function getQAName(email) {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const detail = ss.getSheetByName('Detail');
+  if (!detail) return '';
+  const data = detail.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][1] && data[i][1].toString().trim().toLowerCase() === email.toLowerCase()) {
+      return data[i][0].toString().trim();
+    }
+  }
+  return '';
+}
+
+function isAuthorized() {
+  return getQAName(getUserEmail()) !== '';
+}
+
+function getSheetNames() {
+  return [
+    'Reopen', 'FCR', 'SLA_First_Resolve', 'SLA_First_Response', 'SLA_Final_Resolve',
+    'General Audit', 'CSAT', 'BPO Coaching',
+    'Need Info Abandoned', 'ADR', 'AHT'
+  ];
+}
+
+// ---------- Timestamp Formatter (YYYY-MM-DD HH:mm:ss) ----------
+function formatAuditTimestamp(date) {
+  const d = date instanceof Date ? date : new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  
+  const yyyy = d.getFullYear();
+  const mm = pad(d.getMonth() + 1);
+  const dd = pad(d.getDate());
+  const hh = pad(d.getHours());
+  const min = pad(d.getMinutes());
+  const ss = pad(d.getSeconds());
+
+  return `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`;
+}
+
+// ---------- User statistics ----------
+function getUserStats() {
+  const email = getUserEmail();
+  const qaName = getQAName(email);
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+
+  let submitted = 0;
+  const sheets = ss.getSheets();
+  for (let sheet of sheets) {
+    const name = sheet.getName();
+    if (!name.startsWith('AuditData_')) continue;
+    const data = sheet.getDataRange().getValues();
+    if (data.length < 2) continue;
+    const headers = data[0].map(h => h.toString().trim().toLowerCase());
+    
+    let emailCol = headers.indexOf('qa_email');
+    if (emailCol === -1) emailCol = headers.indexOf('auditor');
+    if (emailCol === -1) continue;
+
+    for (let i = 1; i < data.length; i++) {
+      const cellVal = data[i][emailCol]?.toString().trim().toLowerCase();
+      if (cellVal === email.toLowerCase() || (qaName && cellVal === qaName.toLowerCase())) {
+        submitted++;
+      }
+    }
+  }
+
+  return { qaName: qaName, submitted: submitted };
+}
+
+// ---------- Column finder ----------
+function findCol(headers, name) {
+  return headers.indexOf(name.toLowerCase().trim());
+}
+
+function fetchNextCase(sheetName) {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const source = ss.getSheetByName(sheetName);
+  if (!source) throw new Error('Sheet not found: ' + sheetName);
+
+  const qaName = getQAName(getUserEmail());
+  if (!qaName) throw new Error('User not found in Detail sheet.');
+
+  const data = source.getDataRange().getValues();
+  if (data.length < 2) return null;
+
+  const headers = data[0].map(h => h.toString().trim().toLowerCase());
+
+  const caseCol = findCol(headers, 'case number');
+  const lobCol = ['Need Info Abandoned', 'ADR', 'AHT'].includes(sheetName)
+    ? findCol(headers, 'case lob')
+    : findCol(headers, 'lob');
+
+  let qaCol = findCol(headers, 'qa salesforce name');
+  if (qaCol === -1 && ['ADR', 'AHT'].includes(sheetName)) {
+    qaCol = findCol(headers, 'case owner');
+  }
+
+  if (caseCol === -1 || lobCol === -1)
+    throw new Error('Required columns missing in source sheet.');
+
+  const catHashCol = findCol(headers, 'category hash');
+
+  // CSAT columns
+  let respValCol = -1, surveySentCol = -1, surveyCompCol = -1;
+  if (sheetName === 'CSAT') {
+    respValCol = findCol(headers, 'response value');
+    surveySentCol = findCol(headers, 'survey sent date');
+    surveyCompCol = findCol(headers, 'survey completed date');
+    if (respValCol === -1 || surveySentCol === -1 || surveyCompCol === -1)
+      throw new Error('CSAT sheet missing required columns.');
+  }
+
+  // BPO Coaching columns
+  let bpocCols = {};
+  if (sheetName === 'BPO Coaching') {
+    bpocCols.descCol = findCol(headers, "description of seller's issue");
+    bpocCols.handleCol = findCol(headers, 'how should the agent have handled the case?');
+    bpocCols.jiraCol = findCol(headers, 'jira ticket');
+    bpocCols.kbCol = findCol(headers, 'kbs for agent to review');
+    bpocCols.issuesCol = findCol(headers, 'issues/coachings');
+    if (Object.values(bpocCols).some(idx => idx === -1))
+      throw new Error('BPO Coaching sheet missing required columns.');
+  }
+
+  let weekCol = findCol(headers, 'week');
+  let ownerCol = findCol(headers, 'case owner');
+  let niaValCol = findCol(headers, 'need info abandoned');
+
+  // Audited cases check
+  const auditSheetName = 'AuditData_' + sheetName.replace(/[^a-zA-Z0-9_]/g, '_');
+  const auditSheet = ss.getSheetByName(auditSheetName);
+  const auditedCases = new Set();
+  if (auditSheet) {
+    const aData = auditSheet.getDataRange().getValues();
+    if (aData.length > 0) {
+      const aHeader = aData[0].map(h => h.toString().trim().toLowerCase());
+      let aCaseIdx = findCol(aHeader, 'case_number');
+      if (aCaseIdx === -1) aCaseIdx = findCol(aHeader, 'case number');
+      if (aCaseIdx > -1) {
+        aData.slice(1).forEach(r => {
+          const c = r[aCaseIdx]?.toString().trim();
+          if (c) auditedCases.add(c);
+        });
+      }
+    }
+  }
+
+  // Skipped cases check
+  const skipSheet = ss.getSheetByName(SKIPPED_SHEET_NAME);
+  const skippedSet = new Set();
+  if (skipSheet) {
+    const sData = skipSheet.getDataRange().getValues();
+    if (sData.length > 0) {
+      const sHeader = sData[0].map(h => h.toString().trim().toLowerCase());
+      const sEmailIdx = findCol(sHeader, 'qa_email');
+      const sCaseIdx = findCol(sHeader, 'case_number');
+      if (sEmailIdx > -1 && sCaseIdx > -1) {
+        sData.slice(1).forEach(r => {
+          if (r[sEmailIdx]?.toString().trim().toLowerCase() === getUserEmail().toLowerCase()) {
+            skippedSet.add(r[sCaseIdx]?.toString().trim());
+          }
+        });
+      }
+    }
+  }
+
+  const agentCol = (sheetName === 'CSAT' || sheetName === 'BPO Coaching')
+    ? findCol(headers, 'agent salesforce name')
+    : -1;
+
+  for (let i = 1; i < data.length; i++) {
+    const caseNum = data[i][caseCol]?.toString().trim();
+    const qaCell = qaCol !== -1 ? data[i][qaCol]?.toString().trim() : '';
+
+    if (!caseNum || auditedCases.has(caseNum) || skippedSet.has(caseNum)) continue;
+    if (qaCol !== -1 && findCol(headers, 'qa salesforce name') !== -1 && qaCell !== qaName) continue;
+
+    let responseValue = '', surveySentDate = '', surveyCompletedDate = '';
+    if (sheetName === 'CSAT') {
+      responseValue = (data[i][respValCol]?.toString().trim() || '');
+      surveySentDate = (data[i][surveySentCol]?.toString().trim() || '');
+      surveyCompletedDate = (data[i][surveyCompCol]?.toString().trim() || '');
+    }
+
+    let categoryHash = '';
+    if (catHashCol !== -1) {
+      categoryHash = data[i][catHashCol]?.toString().trim() || '';
+    }
+
+    const result = {
+      caseNumber: caseNum,
+      lob: data[i][lobCol]?.toString().trim() || '',
+      qaSalesforceName: qaName,
+      categoryHash: categoryHash,
+      responseValue: responseValue,
+      surveySentDate: surveySentDate,
+      surveyCompletedDate: surveyCompletedDate
+    };
+
+    if ((sheetName === 'CSAT' || sheetName === 'BPO Coaching') && agentCol !== -1) {
+      result.agentSalesforceName = data[i][agentCol]?.toString().trim() || '';
+    }
+
+    if (sheetName === 'BPO Coaching') {
+      result.bpocFields = {
+        description: data[i][bpocCols.descCol]?.toString().trim() || '',
+        handling: data[i][bpocCols.handleCol]?.toString().trim() || '',
+        jira: data[i][bpocCols.jiraCol]?.toString().trim() || '',
+        kb: data[i][bpocCols.kbCol]?.toString().trim() || '',
+        issues: data[i][bpocCols.issuesCol]?.toString().trim() || ''
+      };
+    }
+
+    if (['Need Info Abandoned', 'ADR', 'AHT'].includes(sheetName)) {
+      result.niaFields = {
+        week: weekCol !== -1 ? (data[i][weekCol]?.toString().trim() || '') : '',
+        caseOwner: ownerCol !== -1 ? (data[i][ownerCol]?.toString().trim() || '') : '',
+        needInfoAbandoned: niaValCol !== -1 ? (data[i][niaValCol]?.toString().trim() || '') : 'N/A'
+      };
+      result.agentSalesforceName = result.niaFields.caseOwner;
+    }
+
+    return result;
+  }
+
+  return null;
+}
+
+function skipCase(caseNumber, sourceSheet) {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const skipSheet = ss.getSheetByName(SKIPPED_SHEET_NAME) || ss.insertSheet(SKIPPED_SHEET_NAME);
+  if (skipSheet.getLastRow() === 0) {
+    skipSheet.appendRow(['Timestamp', 'QA_Email', 'Case_Number', 'Source_Sheet']);
+  }
+  skipSheet.appendRow([new Date(), getUserEmail(), caseNumber, sourceSheet]);
+  return { success: true };
+}
+
+// ---------- Live Dynamic Fetcher from HR Template Sheet (Column A) ----------
+function getHRTemplateNames() {
+  try {
+    const ss = SpreadsheetApp.openById(HR_SPREADSHEET_ID);
+    const sheet = ss.getSheetByName('Sheet1') || ss.getSheets()[0];
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 2) return [];
+
+    const data = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+    const nameSet = new Set();
+    for (let i = 0; i < data.length; i++) {
+      const name = String(data[i][0] || '').trim();
+      if (name) nameSet.add(name);
+    }
+    return Array.from(nameSet).sort();
+  } catch (err) {
+    Logger.log("Error reading HR Template Sheet: " + err.message);
+    return [];
+  }
+}
+
+// ---------- Need Info Dropdown Options ----------
+function getNeedInfoRequiredOptions() {
+  return [
+    "Elaboration",
+    "Item id",
+    "Shipment ID",
+    "Tracking ID",
+    "Feed ID",
+    "Screenshot",
+    "Other - See Summary",
+    "Product Mismatch - Request UPC Documentation",
+    "Claiming Brand Ownership",
+    "Requested competitor URL",
+    "Incorrect case status update"
+  ];
+}
+
+// ---------- ADR / AHT Dropdowns ----------
+function getADRReasonOptions() {
+  return [
+    "Agent error - Delay in Response",
+    "Agent error - Incorrect Handling",
+    "Escalated to External Team",
+    "Handled by another queue initially",
+    "Seller - Cross Question",
+    "Stucked in Another Queue"
+  ];
+}
+
+function getAHTReasonOptions() {
+  return [
+    "Agent error - Unnecessary Handling",
+    "Kept in verify - SOP Followed",
+    "Agent error - Incorrect Handling",
+    "Escalated to External Team",
+    "Handled by another queue initially",
+    "Seller - Cross Question"
+  ];
+}
+
+function getExternalTeamSubReasons() {
+  return [
+    "Canada Service now",
+    "IRIS",
+    "ITS Request",
+    "Outlook",
+    "Pricing Anamoly",
+    "Production JIRA",
+    "Review Refresh",
+    "Dependency from FC",
+    "SFS Team",
+    "Compliance Team",
+    "Escalated to Fixit",
+    "SSS Optout",
+    "Strikethrough",
+    "Supervisor Escalation",
+    "Techops JIRA",
+    "Slack",
+    "UGC",
+    "SOP Not Available",
+    "N/A"
+  ];
+}
+
+// ---------- Reopen hierarchy ----------
+function getReopenRootCauseHierarchy() {
+  const rootMap = {
+    "System": ["System issue","Other - see remark"],
+    "Process\\Policy": ["Duplicate Case Handling Process","HR Template Used","UA Template Used","IRIS-GWF/Agentic AI Followed","Other - see remark"],
+    "Seller": ["Seller ask new question","Seller wants to keep case open for verification","Additional clarification requested by seller","Dissatisfied_with_Solution","Dissatisfied_with_Process_Policy","Dissactified_with_being_referred_to_3rd_party","Other - see remark"],
+    "Agent": ["Agent click wrong case status","Incompleted solution(Multiple questions in a case)","Incompleted solution(1 question in a case)","Incorrect Resolution","Other - see remark"],
+    "AutoReply_ThankYou_Blank": ["Thank you","Email auto reply from seller","Blank mail from seller","Other - see remark"],
+    "Other": ["Handled by Another Team","Other - see remark"]
+  };
+  const sellerDsatMap = {
+    "Dissatisfied_with_Solution": ["DIM Dispute - Not Accept the Reimbursement Value","DIM - Request to verify past Historical fees","DIM Dispute - Need Remeasured Photos from FC","DIM Dispute - Not Accept the Remeasured Data","IBQ Dispute - Not Accept the Reimbursement Value","IBQ Dispute - Not accepting the Overage receives","IBQ Dispute - 10 days dispute window","ITS Shipment - Within 10 Days","IBQ Dispute - 50 days dispute window","Refund Dispute - 45 days dispute window","Not Satisfied with Reimbursement Amount","Refund Dispute -others (details see remark)","Other - see remark"],
+    "Dissatisfied_with_Process_Policy": ["Buy Box Loss","Negative Reviews - Not meeting criteria","Negative Reviews - logistics/ shipping issues","Restricted sale for international sellers","Sellers can't cancel the WFS Order","Sellers can't change the product ID for WFS Item","Duplicate variants found despite seller claim","Other - see remark"],
+    "Dissactified_with_being_referred_to_3rd_party": ["Refered to Carrier For shipment missing","Refered to CCA for refund/cancel/late order","Refered to Account Manager - Event","Other - see remark"],
+  };
+  const hierarchy = {};
+  for (const [root, subs] of Object.entries(rootMap)) {
+    hierarchy[root] = subs.map(sub => ({
+      label: sub,
+      hasDetail: !!sellerDsatMap[sub],
+      detailOptions: sellerDsatMap[sub] || []
+    }));
+  }
+  return hierarchy;
+}
+
+// ---------- FCR reason map ----------
+function getFCRReasonMap() {
+  return {
+    "System": ["System issue","Email Sent Twice","Automation issue","Other - see remark"],
+    "Process/Policy": ["IRIS GWF Limitation","HR Template Used","UA Template Used","Verify Status Limitation - SOP Followed","Escalated to External Team","Policy Gap","SOP Limitation","Other - see remark"],
+    "Seller": ["Additional Information Required from Seller","Cross Question - Related to Same Issue","Cross Question - New/Unrelated Issue","Reopened Without Response","Seller Dissatisfied","Other - see remark"],
+    "Agent": ["Incorrect/Partial Resolution Provided","No Proper Troubleshooting","SOP Not Followed IQD Claim Value  $100-$500","Unnecessary Internal Email Sent – Agent Fault","Other - see remark"],
+    "AutoReply_ThankYou_Blank": ["Thank you","Email auto reply from seller","Blank email from seller","System generated email","Other - see remark"],
+    "Other": ["Handled by Another Team","Other - see remark"]
+  };
+}
+
+// ---------- FCR Alternative Sub Reason Map ----------
+function getFCRAlternativeSubReasonMap() {
+  return {
+    "Additional Information Required from Seller": [
+      "Requested Documentation (UPC Doc / Brand Ownership Claim / Other)",
+      "Requested error screenshot / elaboration / additional details",
+      "Requested Feed ID / Item ID",
+      "Requested Disputes Template / POD / Packing List / BOL",
+      "Requested POD / RSL / Clear image of Return Item / Attachments",
+      "Requested Tracking ID / Order ID",
+      "DIMS - Physical images of item measurement/Seller's expected dimensions",
+      "Other - see remark"
+    ],
+    "Cross Question - Related to Same Issue": [
+      "Not satisfied with reimbursement",
+      "Provided Additional Item ID",
+      "Provided Error Feed ID",
+      "Provided Shipment ID / Order ID / Tracking ID",
+      "Provided Additional Removal Order",
+      "Asked for additional clarification",
+      "Other - see remark"
+    ],
+    "Escalated to External Team": [
+      "Escalated to Fixit",
+      "Escalated to TechOps JIRA",
+      "Escalated to Production JIRA",
+      "Escalated to Canada Service Now",
+      "Escalated to ITS Request",
+      "Escalated to SSS Opt Out",
+      "Escalated to Strikethrough",
+      "Escalated to Slack",
+      "Escalated to Outlook",
+      "Escalated to Team",
+      "Updated CN Brand Gating Excel file",
+      "Other - see remark"
+    ],
+    "Incorrect/Partial Resolution Provided": [
+      "Acuitty Agent Fault",
+      "Non-Acuitty Agent Fault",
+      "Other - see remark"
+    ]
+  };
+}
+
+// SLA reasons
+function getSLAFirstResolveReasons() {
+  return [
+    "Kept in Verify - SOP Followed","Escalated to External Team","Needed more Info from the Seller",
+    "Unnecessary Status Update","Handled by another team Initially","Failed to update Correct Case status",
+    "Unnecessary Information asked from the seller",
+    "Escalated by Another team - Received after SLA Breached","Agent fault - Delayed in Response",
+    "Kept in verify twice (24 Hrs again after 1st verify)",
+    "Kept in verify - Stucked in backlog (Didn't reassign within next 24 Hrs)"
+  ];
+}
+function getSLAFirstResponseReasons() {
+  return [
+    "Agent Error - Agent Delay in Response","Received after SLA Breach - Handled by another Team",
+    "Agent Error - Incorrect Tranfer Initially","Stucked in WFS Disputes landing Queue",
+    "Agent Error - Failed to Send email initally (Verify status)",
+    "Agent Error - Incorrect Tranfer Initially - Non Acuity Agent","Received after SLA Breach"
+  ];
+}
+function getSLAFinalResolveReasons() {
+  return [
+    "Case Reopened by Seller – Cross Question (Same Issue)","Case Reopened by Seller – New/Unrelated Issue",
+    "Case Reopened Without Seller Response","Additional Information Received After SLA Breached","Additional Information Requested from the Seller",
+    "Escalated to External Team/ Created JIRA",
+    "Agent Missed SLA / Delay in Response","Kept in Verify/Internal - Followed SOP","Case assigned from another queue after 24 Hrs - Next 24 Hrs kept in verify",
+    "System/Policy Limitation - Needed Info - No Info provided","Case assigned after 48 Hrs SLA","Case assigned after 24 Hrs - Next 24 Hrs kept in verify",
+    "Incorrect Resolution/Case Misshandling","SLA Breached by Another Team",
+    "Kept in verify twice (24 Hrs again after 1st verify)",
+    "Kept in verify - Stuck in backlog (Didn't reassign within next 24 Hrs)",
+    "System/Policy Limitation",
+    "Agent Incorrectly selected the case status","Agent kept the case in Verify Unnecessarily",
+    "Case Stucked in Queue Backlog",
+    "Agent Incorrectly marked case in Need Info- Internal","Agent Error - Incorrect Initial Routing"
+  ];
+}
+
+// ---------- Submit audit ----------
+function submitAudit(formData) {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const queue = formData.sourceSheet;
+  const sheetName = 'AuditData_' + queue.replace(/[^a-zA-Z0-9_]/g, '_');
+  const auditSheet = ss.getSheetByName(sheetName) || ss.insertSheet(sheetName);
+
+  let percent = 0;
+  if (['Reopen', 'FCR', 'General Audit', 'CSAT', 'BPO Coaching'].includes(queue)) {
+    const weights = [10,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5];
+    let totalW = 0, earnedW = 0;
+    const q1 = formData.q1;
+    if (q1 === 'No') {
+      earnedW = 0; totalW = 100;
+    } else {
+      for (let i = 0; i < 19; i++) {
+        const ans = formData['q'+(i+1)];
+        if (ans === 'Yes') { earnedW += weights[i]; totalW += weights[i]; }
+        else if (ans === 'No') { totalW += weights[i]; }
+      }
+    }
+    percent = totalW > 0 ? Math.round((earnedW / totalW) * 100) : 0;
+  }
+
+  const baseRow = [
+    new Date(), getUserEmail(), queue, formData.caseNumber,
+    formData.agentSalesforceName || '',
+    formData.lob,
+    formData.touchCounter || 0, formData.qaSalesforceName,
+    formData.categoryHash || ''
+  ];
+
+  const getAnswersArray = () => {
+    const arr = [];
+    for (let i = 1; i <= 19; i++) arr.push(formData['q'+i] || '');
+    return arr;
+  };
+
+  const qaHeaders = [
+    'Q1_ResolvedCorrectly', 'Q2_InternalArticle', 'Q3_ArticleSelfServe',
+    'Q4_ReopenReasonAcknowledged', 'Q5_CaseTransferCorrect', 'Q6_CSATSurveySent',
+    'Q7_RequiredTemplate', 'Q8_AnsweredAllQuestions', 'Q9_RootCauseAcknowledged',
+    'Q10_IncorrectStatusUpdate', 'Q11_InternalCaseCommentCorrect', 'Q12_RudeBlameAvoided',
+    'Q13_WordingSpelling', 'Q14_CorrectCaseCategory', 'Q15_ExpectedAATAHT',
+    'Q16_ResolutionBeforeCrossOut', 'Q17_InitiatedIRIS', 'Q18_SharedInternalInfo',
+    'Q19_OperatingBehaviorCorrect'
+  ];
+
+  if (queue === 'Need Info Abandoned') {
+    if (auditSheet.getLastRow() === 0) {
+      auditSheet.appendRow([
+        'Week', 'Timestamp', 'QA_Email', 'Source_Sheet', 'Case Number',
+        'Case Owner', 'Case LOB', 'Need Info Abandoned', 'Category HASH',
+        'Auditor', 'What was required?', 'Summary', 'Agent Fault',
+        'Audit_Start_Time', 'Audit_End_Time', 'Audit_Duration_Minutes'
+      ]);
+    }
+    auditSheet.appendRow([
+      formData.niaWeek || '',
+      formatAuditTimestamp(new Date()),
+      getUserEmail(),
+      queue,
+      formData.caseNumber,
+      formData.agentSalesforceName,
+      formData.lob,
+      formData.niaAbandonedVal || 'N/A',
+      formData.categoryHash || '',
+      formData.qaSalesforceName,
+      formData.whatWasRequired,
+      formData.diagnosticRemarks,
+      formData.agentFault,
+      formData.auditStartTime,
+      formData.auditEndTime,
+      formData.auditDuration
+    ]);
+  } else if (['ADR', 'AHT'].includes(queue)) {
+    if (auditSheet.getLastRow() === 0) {
+      auditSheet.appendRow([
+        'Week', 'Timestamp', 'QA_Email', 'Source_Sheet', 'Case Number',
+        'Case Owner', 'Case LOB', 'Need Info Abandoned', 'Category HASH',
+        'Auditor', 'What was required?', 'Summary',
+        'Previous Queue Name', 'Previous Queue assigned date', 'Latest assignemnt date to Main queue',
+        'Agent Fault', 'Audit_Start_Time', 'Audit_End_Time', 'Audit_Duration_Minutes'
+      ]);
+    }
+    auditSheet.appendRow([
+      formData.niaWeek || '',
+      formatAuditTimestamp(new Date()),
+      getUserEmail(),
+      queue,
+      formData.caseNumber,
+      formData.agentSalesforceName,
+      formData.lob,
+      'N/A',
+      formData.categoryHash || '',
+      formData.qaSalesforceName,
+      formData.whatWasRequired,
+      formData.diagnosticRemarks,
+      formData.prevQueueName || '',
+      formData.prevQueueAssignedDate || '',
+      formData.latestAssignDate || '',
+      formData.agentFault,
+      formData.auditStartTime,
+      formData.auditEndTime,
+      formData.auditDuration
+    ]);
+  } else if (queue === 'Reopen') {
+    if (auditSheet.getLastRow() === 0) {
+      auditSheet.appendRow([
+        'Timestamp', 'QA_Email', 'Source_Sheet', 'Case_Number', 'Agent_Salesforce_Name', 'LOB', 'Touch_Counter', 'Auditor_Name', 'Category_HASH',
+        ...qaHeaders,
+        'Total_Score_Percent', 'RootCause_Type', 'RootCause_Subcategory', 'RootCause_Detail', 'RootCause_Remark',
+        'Correct_KB_Link', 'Diagnostic_Remarks', 'Coaching_Note', 'Case_Accept_DateTime',
+        'Audit_Start_Time', 'Audit_End_Time', 'Audit_Duration_Minutes'
+      ]);
+    }
+    auditSheet.appendRow([...baseRow, ...getAnswersArray(), percent,
+      formData.rootCauseType, formData.subcategory, formData.detail || '', formData.rootCauseRemark || '',
+      formData.kbLink, formData.diagnosticRemarks, formData.coachingNote, formData.caseAcceptDateTime || '',
+      formData.auditStartTime, formData.auditEndTime, formData.auditDuration
+    ]);
+  } else if (queue === 'FCR') {
+    if (auditSheet.getLastRow() === 0) {
+      auditSheet.appendRow([
+        'Timestamp', 'QA_Email', 'Source_Sheet', 'Case_Number', 'Agent_Salesforce_Name', 'LOB', 'Touch_Counter', 'Auditor_Name', 'Category_HASH',
+        ...qaHeaders,
+        'Total_Score_Percent', 'FCR_Category', 'FCR_Subcategory', 'FCR_Alternative_Sub_Reason', 'FCR_Remark',
+        'Correct_KB_Link', 'Diagnostic_Remarks', 'Coaching_Note', 'Case_Accept_DateTime',
+        'Audit_Start_Time', 'Audit_End_Time', 'Audit_Duration_Minutes'
+      ]);
+    }
+    auditSheet.appendRow([...baseRow, ...getAnswersArray(), percent,
+      formData.fcrCategory, formData.fcrSubcategory, formData.fcrAlternativeSubReason || '', formData.fcrRemark || '',
+      formData.kbLink, formData.diagnosticRemarks, formData.coachingNote, formData.caseAcceptDateTime || '',
+      formData.auditStartTime, formData.auditEndTime, formData.auditDuration
+    ]);
+  } else if (queue.startsWith('SLA_')) {
+    if (auditSheet.getLastRow() === 0) {
+      auditSheet.appendRow([
+        'Timestamp', 'QA_Email', 'Source_Sheet', 'Case_Number', 'Agent_Salesforce_Name', 'LOB', 'Touch_Counter', 'Auditor_Name', 'Category_HASH',
+        'SLA_Reason', 'Agent_Fault', 'SLA_Additional_Notes', 'Diagnostic_Remarks',
+        'Audit_Start_Time', 'Audit_End_Time', 'Audit_Duration_Minutes'
+      ]);
+    }
+    auditSheet.appendRow([...baseRow, formData.slaReason, formData.agentFault, formData.slaAdditionalNotes || '',
+      formData.diagnosticRemarks, formData.auditStartTime, formData.auditEndTime, formData.auditDuration
+    ]);
+  } else if (queue === 'CSAT') {
+    if (auditSheet.getLastRow() === 0) {
+      auditSheet.appendRow([
+        'Timestamp', 'QA_Email', 'Source_Sheet', 'Case_Number', 'Agent_Salesforce_Name', 'LOB', 'Touch_Counter', 'Auditor_Name', 'Category_HASH',
+        'Response_Value', 'Survey_Sent_Date', 'Survey_Completed_Date', 'Error_Type', 'CSAT_Audit_Status', 'Coaching_Note',
+        ...qaHeaders,
+        'Total_Score_Percent', 'Diagnostic_Remarks', 'Case_Accept_DateTime',
+        'Audit_Start_Time', 'Audit_End_Time', 'Audit_Duration_Minutes'
+      ]);
+    }
+    auditSheet.appendRow([...baseRow, formData.responseValue || '', formData.surveySentDate || '', formData.surveyCompletedDate || '',
+      formData.errorType, formData.csatAuditStatus || '', formData.coachingNote || '', ...getAnswersArray(), percent,
+      formData.diagnosticRemarks, formData.caseAcceptDateTime || '',
+      formData.auditStartTime, formData.auditEndTime, formData.auditDuration
+    ]);
+  } else if (queue === 'BPO Coaching') {
+    if (auditSheet.getLastRow() === 0) {
+      auditSheet.appendRow([
+        'Timestamp', 'QA_Email', 'Source_Sheet', 'Case_Number', 'Agent_Salesforce_Name', 'LOB', 'Touch_Counter', 'Auditor_Name',
+        'Description_of_Sellers_Issue', 'How_Agent_Should_Handle', 'Jira_Ticket', 'KBs_for_Agent_to_Review', 'Issues_Coachings',
+        'Escalation_Validity', 'Challenging_Note', 'Auditor_Note', 'Additional_Comment',
+        ...qaHeaders,
+        'Total_Score_Percent', 'Diagnostic_Remarks', 'Case_Accept_DateTime',
+        'Audit_Start_Time', 'Audit_End_Time', 'Audit_Duration_Minutes'
+      ]);
+    }
+    auditSheet.appendRow([
+      new Date(), getUserEmail(), queue, formData.caseNumber, formData.agentSalesforceName, formData.lob,
+      formData.touchCounter || 0, formData.qaSalesforceName,
+      formData.bpocDescription || '', formData.bpocHandling || '', formData.bpocJira || '', formData.bpocKB || '', formData.bpocIssues || '',
+      formData.escalationValidity || '', formData.challengingNote || '', formData.auditorNote || '', formData.additionalComment || '',
+      ...getAnswersArray(), percent,
+      formData.diagnosticRemarks, formData.caseAcceptDateTime || '',
+      formData.auditStartTime, formData.auditEndTime, formData.auditDuration
+    ]);
+  } else if (queue === 'General Audit') {
+    if (auditSheet.getLastRow() === 0) {
+      auditSheet.appendRow([
+        'Timestamp', 'QA_Email', 'Source_Sheet', 'Case_Number', 'Agent_Salesforce_Name', 'LOB', 'Touch_Counter', 'Auditor_Name', 'Category_HASH',
+        ...qaHeaders,
+        'Total_Score_Percent', 'Coaching_Details', 'Diagnostic_Remarks', 'Case_Accept_DateTime',
+        'Audit_Start_Time', 'Audit_End_Time', 'Audit_Duration_Minutes'
+      ]);
+    }
+    auditSheet.appendRow([...baseRow, ...getAnswersArray(), percent,
+      formData.coachingDetails || '', formData.diagnosticRemarks, formData.caseAcceptDateTime || '',
+      formData.auditStartTime, formData.auditEndTime, formData.auditDuration
+    ]);
+  }
+
+  return { success: true, percent: percent };
+}
+
+function getPortalConfig() {
+  try {
+    const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const configSheet = ss.getSheetByName('Notice') || ss.getSheetByName('Config');
+    if (!configSheet) return { notices: [], reminders: [] };
+
+    const lastRow = configSheet.getLastRow();
+    if (lastRow < 2) return { notices: [], reminders: [] };
+
+    const data = configSheet.getRange(2, 1, lastRow - 1, 4).getValues();
+    const result = { notices: [], reminders: [] };
+
+    for (let i = 0; i < data.length; i++) {
+      const type = String(data[i][0] || '').trim().toUpperCase();
+      const title = String(data[i][1] || '').trim();
+      const subtitle = String(data[i][2] || '').trim();
+      const content = String(data[i][3] || '').trim();
+
+      if (!type && !title && !content) continue;
+
+      if (type === 'NOTICE') {
+        result.notices.push({
+          title: title || 'NOTICE',
+          subtitle: subtitle || 'Live',
+          content: content
+        });
+      } else if (type === 'REMINDER') {
+        result.reminders.push({
+          title: title || 'Reminder',
+          content: content
+        });
+      }
+    }
+
+    return result;
+  } catch (err) {
+    return {
+      notices: [{ title: 'CONFIG ERROR', subtitle: 'Error', content: err.message }],
+      reminders: [{ title: 'CONFIG ERROR', content: err.message }]
+    };
+  }
+}
+
+function getSalesforceAgentRoster() {
+  try {
+    const ss = SpreadsheetApp.openById(ROSTER_SPREADSHEET_ID);
+    const sheet = ss.getSheets()[0];
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 2) return [];
+
+    const rawValues = sheet.getRange(2, 7, lastRow - 1, 1).getValues();
+    const nameSet = new Set();
+    for (let i = 0; i < rawValues.length; i++) {
+      const name = String(rawValues[i][0] || '').trim();
+      if (name) nameSet.add(name);
+    }
+
+    return Array.from(nameSet).sort();
+  } catch (err) {
+    Logger.log("Error fetching agent roster: " + err.message);
+    return [];
+  }
+}
+
+// ============================================================================
+// AUTOMATIC CELL LIMIT GUARD & CLEANUP EXTENSION
+// ============================================================================
+
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu('⚡ Portal Maintenance')
+    .addItem('Prune Excess Blank Cells Now', 'pruneWorkbookExcessCells')
+    .addItem('Check Total Workbook Cell Count', 'logWorkbookCellUsage')
+    .addToUi();
+}
+
+function pruneWorkbookExcessCells() {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sheets = ss.getSheets();
+  let cellsCleaned = 0;
+
+  sheets.forEach(sheet => {
+    const maxRows = sheet.getMaxRows();
+    const lastRow = Math.max(sheet.getLastRow(), 1);
+    const maxCols = sheet.getMaxColumns();
+    const lastCol = Math.max(sheet.getLastColumn(), 1);
+
+    const targetRows = Math.min(maxRows, lastRow + 5);
+    const targetCols = Math.min(maxCols, lastCol + 5);
+
+    if (maxRows > targetRows) {
+      const rowsToDelete = maxRows - targetRows;
+      sheet.deleteRows(targetRows + 1, rowsToDelete);
+      cellsCleaned += rowsToDelete * maxCols;
+    }
+
+    if (maxCols > targetCols) {
+      const colsToDelete = maxCols - targetCols;
+      sheet.deleteColumns(targetCols + 1, colsToDelete);
+      cellsCleaned += colsToDelete * targetRows;
+    }
+  });
+
+  Logger.log('Cleaned up approximately ' + cellsCleaned.toLocaleString() + ' unused cells.');
+  return cellsCleaned;
+}
+
+function logWorkbookCellUsage() {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  let totalCells = 0;
+  
+  ss.getSheets().forEach(s => {
+    const count = s.getMaxRows() * s.getMaxColumns();
+    totalCells += count;
+    Logger.log(s.getName() + ': ' + s.getMaxRows() + ' rows x ' + s.getMaxColumns() + ' cols = ' + count.toLocaleString() + ' cells');
+  });
+
+  Logger.log('TOTAL WORKBOOK CELLS: ' + totalCells.toLocaleString() + ' / 10,000,000');
+  
+  try {
+    SpreadsheetApp.getUi().alert('Cell Usage', 'Current Total Cells: ' + totalCells.toLocaleString() + ' / 10,000,000', SpreadsheetApp.getUi().ButtonSet.OK);
+  } catch(e) {}
+}
+
+function safeAppendRow(sheet, rowData) {
+  try {
+    sheet.appendRow(rowData);
+  } catch (err) {
+    if (err.message && err.message.includes('10000000')) {
+      pruneWorkbookExcessCells();
+      sheet.appendRow(rowData);
+    } else {
+      throw err;
+    }
+  }
+}
+;return {doGet:doGet,fetchNextCase:fetchNextCase,findCol:findCol,formatAuditTimestamp:formatAuditTimestamp,getADRReasonOptions:getADRReasonOptions,getAHTReasonOptions:getAHTReasonOptions,getExternalTeamSubReasons:getExternalTeamSubReasons,getFCRAlternativeSubReasonMap:getFCRAlternativeSubReasonMap,getFCRReasonMap:getFCRReasonMap,getHRTemplateNames:getHRTemplateNames,getNeedInfoRequiredOptions:getNeedInfoRequiredOptions,getPortalConfig:getPortalConfig,getQAName:getQAName,getReopenRootCauseHierarchy:getReopenRootCauseHierarchy,getSLAFinalResolveReasons:getSLAFinalResolveReasons,getSLAFirstResolveReasons:getSLAFirstResolveReasons,getSLAFirstResponseReasons:getSLAFirstResponseReasons,getSalesforceAgentRoster:getSalesforceAgentRoster,getSheetNames:getSheetNames,getUserEmail:getUserEmail,getUserStats:getUserStats,isAuthorized:isAuthorized,logWorkbookCellUsage:logWorkbookCellUsage,onOpen:onOpen,pruneWorkbookExcessCells:pruneWorkbookExcessCells,safeAppendRow:safeAppendRow,skipCase:skipCase,submitAudit:submitAudit};
+})();
+if(DEMO.init) DEMO.init();
+</script>
+
+  
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>QA Audit Portal - Acuitty Tech</title>
+  <link rel="stylesheet" href="lib/bs4.css">
+  <link rel="stylesheet" href="lib/fa/css/all.min.css">
+  <style id="theme-style">
+    body { background: #f0f3f8; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #2d3748; }
+    .navbar { background: #1a2332; box-shadow: 0 2px 10px rgba(0,0,0,0.15); padding: 0.5rem 1.25rem; }
+    .navbar-brand { font-weight: 700; color: #ffffff !important; }
+    .navbar-brand span { color: #3b82f6; }
+    .stats-bar { background: #ffffff; border: 1px solid #e2e8f0; padding: 7px 14px; border-radius: 6px; margin-bottom: 10px; font-weight: 500; font-size: 0.88rem; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+    .card { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); margin-bottom: 0.75rem; }
+    .card-header { background: #ffffff; border-bottom: 1px solid #edf2f7; font-weight: 600; color: #1e293b; font-size: 0.88rem; padding: 0.5rem 1rem; }
+    .section-icon { color: #2563eb; margin-right: 6px; }
+    .btn-primary { background: #2563eb; border: none; font-weight: 600; }
+    .btn-warning { background: #f59e0b; color: #fff; border: none; font-weight: 600; }
+    .btn-success { background: #059669; border: none; font-weight: 600; }
+    .fetch-box { background: #f8fafc; padding: 0.75rem !important; }
+    .form-group { margin-bottom: 0.5rem !important; }
+    .form-control, .form-control:focus { background: #fff; border-color: #cbd5e1; color: #1e293b; font-size: 0.84rem; height: calc(1.9rem + 2px); padding: 0.25rem 0.6rem; }
+    .form-control[readonly] { background-color: #f1f5f9; color: #475569; }
+    .table thead th { border-bottom: 2px solid #2563eb; background: #f8fafc; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.5px; color: #475569; padding: 0.45rem 0.6rem; }
+    .table td { padding: 0.4rem 0.6rem; vertical-align: middle; font-size: 0.84rem; }
+    .table-hover tbody tr:hover { background-color: #f1f5f9; }
+    .alert-info { background: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe; font-size: 0.85rem; padding: 0.5rem 0.75rem; }
+    .alert-danger { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+    .sticky-panel { position: sticky; top: 0.75rem; z-index: 10; }
+    .sla-header { background-color: #2563eb; color: #fff; }
+    .notice-card { background: #fff0f3; border: 1px solid #fed7e2 !important; border-radius: 6px; }
+    .notice-header { background: #ffe3ec; border-bottom: 1px solid #fbb6ce; font-weight: 700; color: #97266d; }
+    .notice-text { color: #702459; font-size: 0.82rem; white-space: pre-wrap; word-break: break-word; line-height: 1.5; }
+    .reminder-text { font-size: 0.81rem; white-space: pre-wrap; word-break: break-word; line-height: 1.4; color: #334155; }
+    .field-tag { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; color: #64748b; margin-bottom: 0.15rem; display: block; }
+    textarea.stretchable { resize: vertical !important; min-height: 34px; }
+    .name-error-msg { font-size: 0.72rem; color: #dc2626; font-weight: 600; margin-top: 2px; display: none; }
+    .input-invalid { border-color: #dc2626 !important; background-color: #fef2f2 !important; }
+    .red-highlighter-alert { background: #ffe6e6 !important; color: #cc0000 !important; border: 1px solid #ff9999 !important; border-radius: 4px; padding: 6px 12px; font-size: 0.83rem; margin-bottom: 0.6rem; }
+    
+    /* Anti-Bot Custom Dropdown Architecture */
+    .guard-select-box { position: relative; width: 100%; user-select: none; }
+    .guard-trigger {
+      display: flex; justify-content: space-between; align-items: center;
+      background-color: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px;
+      padding: 0.25rem 0.6rem; font-size: 0.84rem; height: calc(1.9rem + 2px);
+      cursor: pointer; color: #1e293b; font-weight: 600;
+    }
+    .guard-trigger:after {
+      content: ""; border-left: 4px solid transparent; border-right: 4px solid transparent;
+      border-top: 5px solid #64748b; margin-left: 8px;
+    }
+    .guard-select-box.locked .guard-trigger {
+      background-color: #f1f5f9 !important; color: #94a3b8 !important; cursor: not-allowed !important; border-color: #e2e8f0 !important;
+    }
+    .guard-select-box.locked .guard-trigger:after { border-top-color: #cbd5e1; }
+    .guard-menu {
+      display: none; position: absolute; top: 100%; left: 0; right: 0;
+      background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.15); z-index: 1060; margin-top: 2px;
+      max-height: 220px; overflow-y: auto; list-style: none; padding: 0; margin-bottom: 0;
+    }
+    .guard-menu.open { display: block; }
+    .guard-menu li {
+      padding: 6px 10px; font-size: 0.82rem; color: #1e293b; cursor: pointer;
+      border-bottom: 1px solid #f8fafc; font-weight: 600;
+    }
+    .guard-menu li:hover { background-color: #2563eb; color: #ffffff; }
+    .guard-menu li.selected { background-color: #dbeafe; color: #1e40af; }
+
+    /* Step Lock Indicators */
+    .row-locked { opacity: 0.45; pointer-events: none; }
+    .row-active { background-color: #eff6ff !important; border-left: 3px solid #2563eb; }
+
+    /* Guidelines Modal Styling */
+    #guidelinesModal { background: rgba(15, 23, 42, 0.75); }
+    .sop-scroll-area { max-height: 58vh; overflow-y: auto; font-size: 0.84rem; line-height: 1.6; border: 1px solid #e2e8f0; padding: 16px; border-radius: 4px; background: #fff; }
+    .sop-section-title { font-weight: 700; color: #1e3a8a; border-bottom: 1px solid #cbd5e1; padding-bottom: 3px; margin-top: 12px; margin-bottom: 8px; text-transform: uppercase; font-size: 0.82rem; letter-spacing: 0.5px; }
+
+    /* Mandatory Defect Feedback Alert Highlighting */
+    .coaching-required-alert {
+      border-color: #dc2626 !important;
+      background-color: #fff1f2 !important;
+      box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.2) !important;
+    }
+    .coaching-valid-alert {
+      border-color: #16a34a !important;
+      background-color: #f0fdf4 !important;
+      box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.2) !important;
+    }
+    .word-limit-msg { font-size: 0.74rem; font-weight: 600; margin-top: 3px; }
+  </style>
+</head>
+<body>
+
+<nav class="navbar navbar-dark d-flex justify-content-between align-items-center">
+  <div class="d-flex align-items-center">
+    <span class="navbar-brand mb-0"><i class="fas fa-play mr-2"></i> <span>Acuitty</span> Tech</span>
+    <span class="badge badge-secondary ml-2 font-weight-normal py-1 px-2">QA Portal</span>
+  </div>
+  <div class="d-flex align-items-center">
+    <button type="button" class="btn btn-outline-info btn-sm mr-2 py-0" onclick="openGuidelinesModal(false)"><i class="fas fa-book-open mr-1"></i> QA Guidelines</button>
+    <div class="btn-group btn-group-sm">
+      <button type="button" class="btn btn-outline-light active" onclick="setTheme('classic')">Classic</button>
+      <button type="button" class="btn btn-outline-light" onclick="setTheme('pro')">Pro</button>
+    </div>
+  </div>
+</nav>
+
+<!-- MANDATORY QA GUIDELINES & PORTAL USER MANUAL MODAL -->
+<div class="modal fade" id="guidelinesModal" data-backdrop="static" data-keyboard="false" tabindex="-1" role="dialog" aria-hidden="true">
+  <div class="modal-dialog modal-xl modal-dialog-centered" role="document">
+    <div class="modal-content shadow-lg border-0">
+      <div class="modal-header bg-dark text-white py-2 d-flex justify-content-between align-items-center">
+        <h6 class="modal-title font-weight-bold mb-0">
+          <i class="fas fa-shield-alt text-primary mr-2"></i> Quality Assurance Operating Guidelines, Dropdown Dictionary & Portal Usage Adherence
+        </h6>
+        <span class="badge badge-warning text-dark font-weight-bold" id="scrollWarningBadge">
+          <i class="fas fa-arrow-down mr-1"></i> Scroll to bottom to unlock acknowledgment
+        </span>
+      </div>
+      <div class="modal-body p-3">
+        <div class="sop-scroll-area mb-3" id="sopScrollBox" style="max-height: 60vh; overflow-y: auto;" onscroll="handleSOPScroll(this)">
+          
+          <div class="alert alert-info py-2 small mb-3">
+            <strong>Mandatory Auditor Requirement:</strong> Every QA Auditor must read this operating procedure completely. Every dropdown parameter, rule, and interface feature is detailed below. The checkbox and acceptance button will remain <strong>permanently locked</strong> until you scroll through to the end of this manual.
+          </div>
+
+          <!-- SECTION 1 -->
+          <div class="sop-section-title">1. Portal Usages & Anti-Bot Adherence Guidelines</div>
+          <ul>
+            <li><strong>Sequential Matrix Lock (Q1 to Q19):</strong> Evaluation questions must be assessed sequentially. Question <em>N+1</em> remains strictly disabled until Question <em>N</em> is manually evaluated. Programmatic keyboard navigation, injection scripts, and auto-click browser extensions are actively intercepted and blocked.</li>
+            <li><strong>Zero-Tolerance Fatal Error Rule (Question 1):</strong> Question 1 evaluates <em>"Was the case handled correctly?"</em>. Marking <strong>No</strong> automatically reduces the total audit score to <strong>0%</strong>, regardless of the choices in questions 2 through 19.</li>
+            <li><strong>Strict Coaching Note Enforcement:</strong> If <em>any</em> parameter from Question 1 through Question 19 is marked <strong>"No"</strong>, entering a detailed, actionable coaching note is <strong>mandatory</strong>. Filling in <code>N/A</code>, <code>NA</code>, <code>None</code>, <code>-</code>, or notes shorter than 15 characters will trigger an adherence violation alert and block audit submission.</li>
+            <li><strong>Binary Scoring Enforcement:</strong> Questions 8 through 19 strictly accept only <code>Yes</code> or <code>No</code>. <code>NA</code> is permitted only on questions 2 through 7 where applicable.</li>
+            <li><strong>Cursor Click Mandatory on Custom Dropdowns:</strong> All dropdown triggers use guard containers. Options must be chosen with explicit mouse clicks. Direct shortcut-driven selections are blocked.</li>
+            <li><strong>Agent Name Integrity Check:</strong> In queues requiring manual associate tagging (<em>Reopen</em>, <em>FCR</em>, <em>General Audit</em>), names must match the Salesforce master roster. Inputting timestamps, dates, or non-roster entries triggers a validation error and halts audit submission.</li>
+            <li><strong>Timer Audit Trail:</strong> The portal measures audit start time and completion time. Submissions completed unnaturally fast (&lt; 60 seconds) without comprehensive case review represent an adherence violation.</li>
+          </ul>
+
+          <!-- SECTION 2 -->
+          <div class="sop-section-title">2. Interface & Dashboard Controls</div>
+          <ul>
+            <li><strong>Theme Selector (Classic / Pro):</strong> Toggles between clean daylight styling and high-contrast dark mode. Selection persists in session storage.</li>
+            <li><strong>QA Guidelines Button:</strong> Re-opens this reference manual at any time from the top navigation bar.</li>
+            <li><strong>Left Panel (QA Check Reminders):</strong> Displays active operational quality watchouts and calibration reminders synced from the Config sheet.</li>
+            <li><strong>Right Panel (QA Notice Board):</strong> Displays live policy updates, calibration announcements, and direct documentation hyperlinks.</li>
+            <li><strong>Audit Code:</strong> The target audit queue to evaluate (e.g., <em>Reopen</em>, <em>FCR</em>, <em>CSAT</em>, <em>SLA_First_Response</em>, <em>SLA_First_Resolve</em>, <em>SLA_Final_Resolve</em>, <em>Need Info Abandoned</em>, <em>ADR</em>, <em>AHT</em>, <em>General Audit</em>, <em>BPO Coaching</em>).</li>
+            <li><strong>Fetch Next:</strong> Fetches the oldest un-audited case for the selected queue while automatically excluding previously audited or skipped cases.</li>
+            <li><strong>Skip Button:</strong> Marks a case in the <code>SkippedCases</code> tab under your email ID if self-handled or corrupted, and retrieves the next record.</li>
+            <li><strong>Touch Counter:</strong> Numeric integer recording the total number of agent responses/touches made on the ticket.</li>
+            <li><strong>Case Accept Date & Time:</strong> Timestamp entered in <code>DD/MM/YYYY HH:MM</code> format noting when the associate accepted ticket ownership.</li>
+          </ul>
+
+          <!-- SECTION 3 -->
+          <div class="sop-section-title">3. SLA Reference Standards</div>
+          <table class="table table-bordered table-sm mb-3">
+            <thead class="bg-light">
+              <tr><th>Line of Business (LOB)</th><th>First Response SLA</th><th>First Resolve SLA</th><th>Final Resolve SLA</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>SSO Core / IIC / MPCX / S.I.M.</td><td>&le; 8 Hours</td><td>&le; 2 Days</td><td>&le; 2 Days</td></tr>
+              <tr><td>SSO DISPUTES (SFF)</td><td>&le; 8 Hours</td><td>&le; 72 Hours</td><td>&le; 72 Hours</td></tr>
+              <tr><td>SSO Cust Returns (WFS) / Inventory MGMT</td><td>&le; 8 Hours</td><td>&le; 7 Days</td><td>&le; 7 Days</td></tr>
+              <tr><td>SSO Shipments & Fee Disputes (WFS)</td><td>&le; 8 Hours</td><td>&le; 15 Days</td><td>&le; 15 Days</td></tr>
+            </tbody>
+          </table>
+
+          <!-- SECTION 4 -->
+          <div class="sop-section-title">4. Complete Dropdown Dictionary & Selection Criteria</div>
+
+          <p class="font-weight-bold text-primary mb-1">A. Reopen Queue Dropdowns</p>
+          <ul>
+            <li><strong>Root Cause Type &rarr; Subcategory:</strong>
+              <ul>
+                <li><code>System</code>:
+                  <ul>
+                    <li><em>System issue</em>: Software glitches, automated email formatting breakdowns, or platform errors.</li>
+                    <li><em>Other - see remark</em>: Unlisted system failures; strictly restricted to <strong>maximum 7 words</strong>.</li>
+                  </ul>
+                </li>
+                <li><code>Process\Policy</code>:
+                  <ul>
+                    <li><em>Duplicate Case Handling Process</em>: Ticket reopened following duplicate ticket handling or merging.</li>
+                    <li><em>HR Template Used</em>: <strong>Mandatory Search Selection.</strong> Use the live search bar inside the HR Template dropdown to search and select the exact macro template name sent by the agent.</li>
+                    <li><em>UA Template Used</em>: Agent utilized an unapproved template. Strictly restricted to <strong>maximum 7 words</strong>.</li>
+                    <li><em>IRIS-GWF/Agentic AI Followed</em>: Agent followed approved AI workflows correctly, but the seller reopened. Pre-populates the required inquiry prompt as background placeholder text.</li>
+                    <li><em>Other - see remark</em>: Procedural gap not listed; strictly restricted to <strong>maximum 7 words</strong>.</li>
+                  </ul>
+                </li>
+                <li><code>Seller</code>:
+                  <ul>
+                    <li><em>Seller ask new question</em>: Seller replied with an unrelated new question.</li>
+                    <li><em>Seller wants to keep case open for verification</em>: Seller requests delay to verify inventory or internal records.</li>
+                    <li><em>Additional clarification requested by seller</em>: Clarification sought on provided solution without disputing the outcome.</li>
+                    <li><em>Dissatisfied_with_Solution</em>: <strong>Unlocks 3rd Level Detail Dropdown:</strong>
+                      <ul>
+                        <li><code>DIM Dispute - Not Accept the Reimbursement Value</code>: Contests reimbursement payout for dimension adjustments.</li>
+                        <li><code>DIM - Request to verify past Historical fees</code>: Demands audit of historical monthly fees.</li>
+                        <li><code>DIM Dispute - Need Remeasured Photos from FC</code>: Demands Fulfillment Center photographic measurement proof.</li>
+                        <li><code>DIM Dispute - Not Accept the Remeasured Data</code>: Disagrees with physical remeasurement figures.</li>
+                        <li><code>IBQ Dispute - Not Accept the Reimbursement Value</code>: Contests Inbound Quality dispute compensation.</li>
+                        <li><code>IBQ Dispute - Not accepting the Overage receives</code>: Seller disputes warehouse overage counts.</li>
+                        <li><code>IBQ Dispute - 10 days dispute window</code>: Reopened due to 10-day eligibility rules.</li>
+                        <li><code>ITS Shipment - Within 10 Days</code>: Carrier transit dispute raised inside 10-day window.</li>
+                        <li><code>IBQ Dispute - 50 days dispute window</code> / <code>Refund Dispute - 45 days dispute window</code>: Disagreements over dispute window boundaries.</li>
+                        <li><code>Not Satisfied with Reimbursement Amount</code>: General dispute of calculated credit amount.</li>
+                        <li><code>Refund Dispute -others (details see remark)</code> / <code>Other - see remark</code>: Custom dispute scenario (strictly max 7 words).</li>
+                      </ul>
+                    </li>
+                    <li><em>Dissatisfied_with_Process_Policy</em>: <strong>Unlocks 3rd Level Detail Dropdown:</strong>
+                      <ul>
+                        <li><code>Buy Box Loss</code>: Reopened protesting Buy Box suppression.</li>
+                        <li><code>Negative Reviews - Not meeting criteria</code>: Review removal requests that fail policy criteria.</li>
+                        <li><code>Negative Reviews - logistics/ shipping issues</code>: Review removal requests tied to courier delays.</li>
+                        <li><code>Restricted sale for international sellers</code>: Contesting cross-border seller limitations.</li>
+                        <li><code>Sellers can't cancel the WFS Order</code>: Demanding manual order cancellation outside policy.</li>
+                        <li><code>Sellers can't change the product ID for WFS Item</code>: Contesting product ID lockdown rules.</li>
+                        <li><code>Duplicate variants found despite seller claim</code>: Policy enforcement disputes.</li>
+                      </ul>
+                    </li>
+                    <li><em>Dissactified_with_being_referred_to_3rd_party</em>: <strong>Unlocks 3rd Level Detail Dropdown:</strong>
+                      <ul>
+                        <li><code>Refered to Carrier For shipment missing</code>: Unhappy with courier redirection.</li>
+                        <li><code>Refered to CCA for refund/cancel/late order</code>: Unhappy with Customer Care redirection.</li>
+                        <li><code>Refered to Account Manager - Event</code>: Protesting account management escalation rules.</li>
+                      </ul>
+                    </li>
+                  </ul>
+                </li>
+                <li><code>Agent</code>:
+                  <ul>
+                    <li><em>Agent click wrong case status</em>: Associate prematurely closed or set incorrect ticket status.</li>
+                    <li><em>Incompleted solution(Multiple questions in a case)</em>: Associate addressed only some of multiple questions raised.</li>
+                    <li><em>Incompleted solution(1 question in a case)</em>: Incomplete, vague, or partial resolution provided.</li>
+                    <li><em>Incorrect Resolution</em>: Associate provided incorrect instructions or wrong policy guidance.</li>
+                  </ul>
+                </li>
+                <li><code>AutoReply_ThankYou_Blank</code>:
+                  <ul>
+                    <li><em>Thank you</em> / <em>Email auto reply from seller</em> / <em>Blank mail from seller</em>.</li>
+                  </ul>
+                </li>
+              </ul>
+            </li>
+          </ul>
+
+          <p class="font-weight-bold text-primary mb-1">B. FCR (First Contact Resolution) Queue Dropdowns</p>
+          <ul>
+            <li><strong>FCR Category:</strong> Choose between <code>System</code>, <code>Process/Policy</code>, <code>Seller</code>, <code>Agent</code>, <code>AutoReply_ThankYou_Blank</code>, <code>Reimbursement</code>, or <code>Other</code>.</li>
+            <li><strong>Alternative Sub Reason (Dynamic):</strong>
+              <ul>
+                <li>If <strong>Additional Information Required from Seller</strong> is chosen, select the exact artifact requested:
+                  <ul>
+                    <li><code>Requested Documentation (UPC Doc / Brand Ownership Claim / Other)</code></li>
+                    <li><code>Requested error screenshot / elaboration / additional details</code></li>
+                    <li><code>Requested Feed ID / Item ID</code></li>
+                    <li><code>Requested Disputes Template / POD / Packing List / BOL</code></li>
+                    <li><code>Requested POD / RSL / Clear image of Return Item / Attachments</code></li>
+                    <li><code>Requested Tracking ID / Order ID</code></li>
+                    <li><code>DIMS - Physical images of item measurement/Seller's expected dimensions</code></li>
+                  </ul>
+                </li>
+                <li>If <strong>Cross Question - Related to Same Issue</strong> is chosen, select the seller's follow-up:
+                  <ul>
+                    <li><code>Not satisfied with reimbursement</code>, <code>Provided Additional Item ID</code>, <code>Provided Error Feed ID</code>, <code>Provided Shipment ID / Order ID / Tracking ID</code>, <code>Provided Additional Removal Order</code>, or <code>Asked for additional clarification</code>.</li>
+                  </ul>
+                </li>
+                <li>If <strong>Escalated to External Team</strong> is chosen, select the target partner queue:
+                  <ul>
+                    <li><code>Escalated to Fixit</code>, <code>Escalated to TechOps JIRA</code>, <code>Escalated to Production JIRA</code>, <code>Escalated to Canada Service Now</code>, <code>Escalated to ITS Request</code>, <code>Escalated to SSS Opt Out</code>, <code>Escalated to Strikethrough</code>, <code>Escalated to Slack</code>, <code>Escalated to Outlook</code>, or <code>Escalated to Team</code>.</li>
+                  </ul>
+                </li>
+                <li>If <strong>Incorrect/Partial Resolution Provided</strong> is chosen:
+                  <ul>
+                    <li>Select <code>Acuitty Agent Fault</code> or <code>Non-Acuitty Agent Fault</code>.</li>
+                  </ul>
+                </li>
+              </ul>
+            </li>
+          </ul>
+
+          <p class="font-weight-bold text-primary mb-1">C. CSAT Queue Dropdowns</p>
+          <ul>
+            <li><strong>Error Type:</strong>
+              <ul>
+                <li><code>Agent</code>: The associate caused the seller dissatisfaction through poor communication, incorrect advice, or handling delays. <strong>Selecting "Agent" automatically forces CSAT Audit Status to "Valid" and mandates a comprehensive Coaching Note.</strong></li>
+                <li><code>Policy</code>: Dissatisfaction was solely caused by platform rules or limitations (fee schedule, dispute deadlines).</li>
+                <li><code>System</code>: Dissatisfaction was driven by technical bugs or platform errors.</li>
+              </ul>
+            </li>
+            <li><strong>CSAT Audit Status:</strong> Choose <code>Valid</code> (defect upheld against agent/operation) or <code>Invalid</code> (agent handled case flawlessly according to SOP).</li>
+          </ul>
+
+          <p class="font-weight-bold text-primary mb-1">D. SLA Dropdowns (SLA_First_Response, SLA_First_Resolve, SLA_Final_Resolve)</p>
+          <ul>
+            <li><strong>Reason Selection:</strong> Choose the precise breach cause (e.g., <em>Agent Error - Agent Delay in Response</em>, <em>Kept in Verify - SOP Followed</em>, <em>Received after SLA Breach - Handled by another Team</em>, <em>Escalated to External Team/ Created JIRA</em>, <em>Case assigned after 48 Hrs SLA</em>).</li>
+            <li><strong>Agent Fault:</strong> Must be marked <code>Yes</code> if the assigned associate caused the breach through inaction or failing to follow verify-status timelines, or <code>No</code> if breach occurred prior to queue intake or due to external bottlenecks.</li>
+          </ul>
+
+          <p class="font-weight-bold text-primary mb-1">E. ADR & AHT Queue Dropdowns</p>
+          <ul>
+            <li><strong>Reason:</strong> Choose between:
+              <ul>
+                <li><code>Agent error - Delay in Response</code> / <code>Agent error - Unnecessary Handling</code></li>
+                <li><code>Agent error - Incorrect Handling</code></li>
+                <li><code>Escalated to External Team</code> (Unlocks Sub-Reason: Canada Service now, IRIS, ITS Request, Outlook, Pricing Anamoly, Production JIRA, Review Refresh, SFS Team, SSS Optout, Strikethrough, Supervisor Escalation, Techops JIRA, UGC)</li>
+                <li><code>Handled by another queue initially</code> / <code>Stucked in Another Queue</code></li>
+                <li><code>Seller - Cross Question</code></li>
+              </ul>
+            </li>
+            <li><strong>Queue Routing Tracking:</strong> Record the exact <em>Previous Queue Name</em>, <em>Previous Queue assigned date</em>, and <em>Latest assignment date to Main queue</em> to establish operational delay timelines.</li>
+          </ul>
+
+          <p class="font-weight-bold text-primary mb-1">F. Need Info Abandoned Dropdowns</p>
+          <ul>
+            <li><strong>What was required?:</strong> Identify what the agent requested prior to abandonment:
+              <ul>
+                <li><code>Elaboration</code>, <code>Item id</code>, <code>Shipment ID</code>, <code>Tracking ID</code>, <code>Feed ID</code>, <code>Screenshot</code>, <code>Product Mismatch - Request UPC Documentation</code>, <code>Claiming Brand Ownership</code>, <code>Requested competitor URL</code>, <code>Incorrect case status update</code>, or <code>Other - See Summary</code>.</li>
+              </ul>
+            </li>
+            <li><strong>Agent Fault:</strong> Flag <code>Yes</code> if associate requested redundant details or closed prematurely; flag <code>No</code> if the associate followed SOP.</li>
+          </ul>
+
+          <p class="font-weight-bold text-primary mb-1">G. BPO Coaching Dropdowns</p>
+          <ul>
+            <li><strong>Escalation Validity:</strong> Choose <code>VALID</code> or <code>INVALID</code>. If marked <strong>INVALID</strong>, you must fill out the <strong>Challenging Note</strong> detailing the SOP contradiction.</li>
+          </ul>
+
+          <!-- SECTION 5 -->
+          <div class="sop-section-title">5. Audit Submission & Duration Tracking</div>
+          <ul>
+            <li>Every audit records your logged-in email, audit start timestamp, submission timestamp, and total elapsed duration in minutes.</li>
+            <li>Submitting the audit pushes structured records to the respective <code>AuditData_[Queue]</code> sheet, refreshes your submitted counts, resets the form, and prepares the interface for the next audit.</li>
+          </ul>
+
+          <!-- SECTION 6 -->
+          <div class="sop-section-title">6. Auditor Declaration & Formal Acceptance</div>
+          <p class="mb-0">By confirming below, you acknowledge that you will adhere to every rule, dropdown criterion, and sequential audit verification protocol listed above. Audits found violating these procedures are subject to calibration failure.</p>
+        </div>
+
+        <!-- ACKNOWLEDGEMENT CHECKBOX (DISABLED UNTIL SCROLL TO BOTTOM) -->
+        <div class="form-check bg-light p-2 border rounded d-flex align-items-center">
+          <input class="form-check-input ml-2" type="checkbox" id="ackCheckbox" onchange="toggleAckButton()" disabled>
+          <label class="form-check-label ml-4 font-weight-bold small text-muted" id="ackCheckboxLabel" for="ackCheckbox">
+            <i class="fas fa-lock mr-1 text-danger"></i> Please read and scroll to the bottom of the manual to enable this acknowledgment.
+          </label>
+        </div>
+      </div>
+      <div class="modal-footer py-2 d-flex justify-content-between align-items-center">
+        <span class="small text-danger font-weight-bold" id="ackStatusNotice">
+          <i class="fas fa-exclamation-triangle mr-1"></i> Dashboard locked. Full scroll reading required.
+        </span>
+        <button type="button" class="btn btn-primary btn-sm px-4" id="ackConfirmBtn" onclick="confirmAcknowledgement()" disabled>
+          Acknowledge & Access Dashboard <i class="fas fa-arrow-right ml-1"></i>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="container-fluid px-2 py-2">
+  <div id="slaTableContainer" style="display:none;" class="mb-2">
+    <div class="card border-info mb-1">
+      <div class="card-header sla-header py-1 font-weight-bold">
+        <i class="fas fa-clock mr-1"></i> SLA Reference Table
+      </div>
+      <div class="card-body p-0">
+        <table class="table table-sm table-bordered mb-0" style="font-size: 0.78rem;">
+          <thead class="bg-light">
+            <tr>
+              <th>Line of Business</th>
+              <th>First Response SLA</th>
+              <th>First Resolve SLA</th>
+              <th>Final Resolve SLA</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>SSO Core / IIC / MPCX / S.I.M.</td><td>&le; 8h</td><td>&le; 2 days</td><td>&le; 2 days</td></tr>
+            <tr><td>SSO DISPUTES (SFF)</td><td>&le; 8h</td><td>&le; 72h</td><td>&le; 72h</td></tr>
+            <tr><td>SSO Cust Returns (WFS) / Inventory MGMT</td><td>&le; 8h</td><td>&le; 7 days</td><td>&le; 7 days</td></tr>
+            <tr><td>SSO Shipments & Fee Disputes (WFS)</td><td>&le; 8h</td><td>&le; 15 days</td><td>&le; 15 days</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div id="auth-alert" class="alert alert-danger" style="display:none;"></div>
+
+  <div id="main-form" style="display:none;">
+    <div class="row no-gutters">
+      
+      <!-- LEFT COLUMN -->
+      <div class="col-xl-3 col-lg-3 px-1 mb-2">
+        <div class="sticky-panel">
+          <div class="card">
+            <div class="card-header py-1 font-weight-bold text-muted small">
+              <i class="fas fa-info-circle text-primary mr-1"></i> QA CHECK REMINDERS
+            </div>
+            <div class="card-body p-2" id="remindersContainer">
+              <div class="text-muted small"><i class="fas fa-spinner fa-spin mr-1"></i> Loading reminders...</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- CENTER COLUMN -->
+      <div class="col-xl-6 col-lg-6 px-1 mb-2">
+        <div id="statsBar" class="stats-bar" style="display:none;">
+          Welcome, <strong><span id="welcomeName"></span></strong>
+        </div>
+
+        <!-- 1. Fetch Case Card -->
+        <div class="card">
+          <div class="card-header"><i class="fas fa-search section-icon"></i> Fetch Case for Audit</div>
+          <div class="card-body fetch-box">
+            <div class="form-row align-items-end">
+              <div class="col-md-5 form-group mb-1">
+                <label class="field-tag">Audit Code <span class="text-danger">*</span></label>
+                <div class="guard-select-box" id="box_sheetSelect">
+                  <input type="hidden" id="sheetSelect" value="">
+                  <div class="guard-trigger" onclick="toggleGuardDropdown('sheetSelect', event)">-- Select Code --</div>
+                  <ul class="guard-menu" id="menu_sheetSelect"></ul>
+                </div>
+              </div>
+              <div class="col-md-4 form-group mb-1">
+                <button class="btn btn-primary btn-block btn-sm py-1" onclick="fetchCase()"><i class="fas fa-download mr-1"></i> Fetch Next</button>
+              </div>
+              <div class="col-md-3 form-group mb-1">
+                <button class="btn btn-warning btn-block btn-sm py-1" onclick="skipCurrentCase()"><i class="fas fa-step-forward mr-1"></i> Skip</button>
+              </div>
+            </div>
+            <div id="fetchStatus" class="text-muted small my-1"></div>
+            <hr class="my-1">
+            
+            <div class="form-row">
+              <div class="col-md-4 form-group mb-1">
+                <label class="field-tag">Case Number</label>
+                <input type="text" id="caseNumber" class="form-control" readonly>
+                <input type="hidden" id="niaWeek">
+                <input type="hidden" id="niaAbandonedVal">
+              </div>
+              
+              <div class="col-md-4 form-group mb-1">
+                <label class="field-tag">Agent Name <span class="text-danger">*</span></label>
+                <input type="text" id="agentName" list="rosterList" class="form-control" 
+                       placeholder="Select agent..." autocomplete="off" oninput="validateAgainstRoster(this)">
+                <datalist id="rosterList"></datalist>
+                <div id="agentNameError" class="name-error-msg">
+                  <i class="fas fa-times-circle mr-1"></i> Not found in roster.
+                </div>
+              </div>
+
+              <div class="col-md-4 form-group mb-1">
+                <label class="field-tag">LOB</label>
+                <input type="text" id="lob" class="form-control" readonly>
+              </div>
+            </div>
+
+            <div class="form-row" id="catHashRow">
+              <div class="col-md-6 form-group mb-1">
+                <label class="field-tag">Category HASH</label>
+                <input type="text" id="catHash" class="form-control" readonly>
+              </div>
+              <div class="col-md-6 form-group mb-1">
+                <label class="field-tag">Auditor Name</label>
+                <input type="text" id="qaName" class="form-control" readonly>
+              </div>
+            </div>
+
+            <div class="form-row" id="touchCounterRow">
+              <div class="col-md-6 form-group mb-1" id="touchCounterContainer">
+                <label class="field-tag">Touch Counter <span class="text-danger">*</span></label>
+                <input type="number" id="touchCounter" class="form-control" min="0" placeholder="Required">
+              </div>
+              <div class="col-md-6 form-group mb-1" id="caseAcceptContainer" style="display:none;">
+                <label class="field-tag">Case Accept Date & Time <span class="text-danger">*</span></label>
+                <input type="text" id="caseAcceptDateTime" class="form-control" placeholder="DD/MM/YYYY HH:MM">
+              </div>
+            </div>
+
+            <div class="form-row" id="csatExtraFields" style="display:none;">
+              <div class="col-md-4 form-group mb-1"><label class="field-tag">Response Value</label><input type="text" id="responseValue" class="form-control" readonly></div>
+              <div class="col-md-4 form-group mb-1"><label class="field-tag">Survey Sent</label><input type="text" id="surveySentDate" class="form-control" readonly></div>
+              <div class="col-md-4 form-group mb-1"><label class="field-tag">Survey Completed</label><input type="text" id="surveyCompletedDate" class="form-control" readonly></div>
+            </div>
+
+            <div id="bpocExtraFields" style="display:none;">
+              <div class="form-group mb-1"><label class="field-tag">Description of Seller's Issue</label><textarea id="bpocDescription" class="form-control stretchable" rows="2" readonly></textarea></div>
+              <div class="form-group mb-1"><label class="field-tag">How should agent have handled case?</label><textarea id="bpocHandling" class="form-control stretchable" rows="2" readonly></textarea></div>
+              <div class="form-row">
+                <div class="col-md-4 form-group mb-1"><label class="field-tag">Jira Ticket</label><input type="text" id="bpocJira" class="form-control" readonly></div>
+                <div class="col-md-4 form-group mb-1"><label class="field-tag">KBs for Review</label><input type="text" id="bpocKB" class="form-control" readonly></div>
+                <div class="col-md-4 form-group mb-1"><label class="field-tag">Coachings</label><input type="text" id="bpocIssues" class="form-control" readonly></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="red-highlighter-alert" id="dropdownPromptAlert" style="display:none;">
+          Please select the appropriate option from the dropdown based on the audit findings.
+        </div>
+        <div class="card" id="dropdownCard" style="display:none;">
+          <div class="card-header"><i class="fas fa-list section-icon"></i> Audit Details</div>
+          <div class="card-body p-2" id="dropdownSection"></div>
+        </div>
+
+        <div id="csatDiagnosticAbove" style="display:none;"></div>
+
+        <div class="red-highlighter-alert" id="checklistPromptAlert" style="display:none;">
+          Step-by-Step Matrix: Each question unlocks only after the previous question is manually selected by cursor.
+        </div>
+        <div class="card" id="checklistCard" style="display:none;">
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <span><i class="fas fa-list-ul section-icon"></i> Quality Checklist Matrix</span>
+            <span class="badge badge-primary px-2 py-1">19 Questions (Click Only)</span>
+          </div>
+          <div class="card-body p-0">
+            <div class="table-responsive">
+              <table class="table table-hover table-sm mb-0">
+                <thead><tr><th style="width:5%;">#</th><th style="width:65%;">Question</th><th style="width:12%;">Weight</th><th style="width:18%;">Response</th></tr></thead>
+                <tbody id="questionsBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" id="diagnosticCard">
+          <div class="card-header"><i class="fas fa-sitemap section-icon"></i> Diagnostic Documentation & Notes</div>
+          <div class="card-body p-2" id="diagnosticSection"></div>
+        </div>
+
+        <button class="btn btn-success btn-block font-weight-bold shadow-sm py-2 mb-2" onclick="submitAudit()">
+          <i class="fas fa-save mr-1"></i> Submit Audit
+        </button>
+        <div id="submitMsg" class="mt-2"></div>
+      </div>
+
+      <!-- RIGHT COLUMN -->
+      <div class="col-xl-3 col-lg-3 px-1 mb-2">
+        <div class="sticky-panel">
+          <div class="card notice-card mb-2">
+            <div class="card-header notice-header py-1 d-flex justify-content-between align-items-center">
+              <span><i class="fas fa-bullhorn mr-1 text-danger"></i> QA Notice Board</span>
+              <span class="badge badge-danger">Live</span>
+            </div>
+            <div class="card-body p-2" id="noticesContainer">
+              <div class="text-muted small"><i class="fas fa-spinner fa-spin mr-1"></i> Loading notices...</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.2/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+// ================= GLOBAL SECURITY & ANTI-BOT LAYER =================
+window.addEventListener('keydown', function(e) {
+  if (!e.isTrusted) { e.preventDefault(); e.stopPropagation(); return false; }
+  if (e.altKey || e.key === 'Alt' || ['ArrowDown', 'ArrowUp', 'PageDown', 'PageUp'].includes(e.key)) {
+    const active = document.activeElement;
+    if (active && (active.classList.contains('guard-trigger') || (active.closest('.guard-select-box') && active.id !== 'hrTemplateSearchInput'))) {
+      e.preventDefault();
+      e.stopPropagation();
+      return false;
+    }
+  }
+}, true);
+
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('.guard-select-box')) {
+    document.querySelectorAll('.guard-menu.open').forEach(m => m.classList.remove('open'));
+  }
+});
+
+function toggleGuardDropdown(id, event) {
+  if (!event.isTrusted) return;
+  event.stopPropagation();
+  const box = document.getElementById('box_' + id);
+  if (!box || box.classList.contains('locked')) return;
+
+  const menu = document.getElementById('menu_' + id);
+  const isOpen = menu.classList.contains('open');
+  document.querySelectorAll('.guard-menu.open').forEach(m => m.classList.remove('open'));
+  if (!isOpen) {
+    menu.classList.add('open');
+    if (id === 'rootCauseRemark') {
+      const searchInput = document.getElementById('hrTemplateSearchInput');
+      if (searchInput) {
+        setTimeout(() => searchInput.focus(), 50);
+      }
+    }
+  }
+}
+
+function selectGuardOption(id, val, text, event, onSelectCallback) {
+  if (!event.isTrusted) return;
+  event.stopPropagation();
+  const box = document.getElementById('box_' + id);
+  if (!box || box.classList.contains('locked')) return;
+
+  const hidden = document.getElementById(id);
+  const trigger = box.querySelector('.guard-trigger');
+  const menu = document.getElementById('menu_' + id);
+
+  hidden.value = val;
+  trigger.textContent = text;
+  menu.querySelectorAll('li').forEach(li => li.classList.remove('selected'));
+  if (event.target) event.target.classList.add('selected');
+  menu.classList.remove('open');
+
+  if (typeof onSelectCallback === 'function') {
+    onSelectCallback(val);
+  }
+}
+
+function configureGuardDropdown(id, options, defaultValue, onChangeHandler) {
+  const box = document.getElementById('box_' + id);
+  const menu = document.getElementById('menu_' + id);
+  const hidden = document.getElementById(id);
+  if (!box || !menu || !hidden) return;
+
+  hidden.value = defaultValue || '';
+  const trigger = box.querySelector('.guard-trigger');
+  trigger.textContent = defaultValue || '-- Select --';
+  menu.innerHTML = '';
+
+  options.forEach(opt => {
+    const val = typeof opt === 'object' ? opt.value : opt;
+    const txt = typeof opt === 'object' ? opt.text : opt;
+    const li = document.createElement('li');
+    li.textContent = txt;
+    if (val === defaultValue) li.classList.add('selected');
+    li.onclick = (e) => selectGuardOption(id, val, txt, e, onChangeHandler);
+    menu.appendChild(li);
+  });
+}
+
+function lockGuardDropdown(id, isLocked) {
+  const box = document.getElementById('box_' + id);
+  if (!box) return;
+  if (isLocked) {
+    box.classList.add('locked');
+  } else {
+    box.classList.remove('locked');
+  }
+}
+
+// ================= ACKNOWLEDGEMENT & SCROLL-TO-BOTTOM LOGIC =================
+let hasScrolledToBottom = false;
+
+function checkGuidelinesAcknowledged() {
+  const isAck = sessionStorage.getItem('qa_guidelines_accepted');
+  if (isAck === 'true') {
+    document.getElementById('main-form').style.display = 'block';
+  } else {
+    document.getElementById('main-form').style.display = 'none';
+    openGuidelinesModal(true);
+  }
+}
+
+function openGuidelinesModal(isMandatory) {
+  const checkbox = document.getElementById('ackCheckbox');
+  const checkboxLabel = document.getElementById('ackCheckboxLabel');
+  const btn = document.getElementById('ackConfirmBtn');
+  const badge = document.getElementById('scrollWarningBadge');
+  const notice = document.getElementById('ackStatusNotice');
+  const scrollBox = document.getElementById('sopScrollBox');
+
+  if (isMandatory) {
+    hasScrolledToBottom = false;
+    checkbox.checked = false;
+    checkbox.disabled = true;
+    checkboxLabel.className = 'form-check-label ml-4 font-weight-bold small text-muted';
+    checkboxLabel.innerHTML = '<i class="fas fa-lock mr-1 text-danger"></i> Please read and scroll to the bottom of the manual to enable this acknowledgment.';
+    btn.disabled = true;
+    btn.innerHTML = 'Acknowledge & Access Dashboard <i class="fas fa-arrow-right ml-1"></i>';
+    badge.style.display = 'inline-block';
+    badge.className = 'badge badge-warning text-dark font-weight-bold';
+    badge.innerHTML = '<i class="fas fa-arrow-down mr-1"></i> Scroll to bottom to unlock acknowledgment';
+    notice.style.display = 'inline-block';
+    notice.innerHTML = '<i class="fas fa-exclamation-triangle mr-1"></i> Dashboard locked. Full scroll reading required.';
+    
+    if (scrollBox) scrollBox.scrollTop = 0;
+  } else {
+    hasScrolledToBottom = true;
+    checkbox.checked = true;
+    checkbox.disabled = false;
+    checkboxLabel.className = 'form-check-label ml-4 font-weight-bold small text-success';
+    checkboxLabel.innerHTML = '<i class="fas fa-check-circle mr-1 text-success"></i> Guidelines reviewed and acknowledged.';
+    btn.disabled = false;
+    btn.innerHTML = 'Close Guidelines <i class="fas fa-times ml-1"></i>';
+    badge.className = 'badge badge-success font-weight-bold';
+    badge.innerHTML = '<i class="fas fa-check-circle mr-1"></i> Manual Unlocked';
+    notice.style.display = 'none';
+  }
+
+  $('#guidelinesModal').modal('show');
+}
+
+function handleSOPScroll(element) {
+  if (hasScrolledToBottom) return;
+
+  const isAtBottom = (element.scrollHeight - element.scrollTop - element.clientHeight) <= 20;
+
+  if (isAtBottom) {
+    hasScrolledToBottom = true;
+    const checkbox = document.getElementById('ackCheckbox');
+    const checkboxLabel = document.getElementById('ackCheckboxLabel');
+    const badge = document.getElementById('scrollWarningBadge');
+    const notice = document.getElementById('ackStatusNotice');
+
+    checkbox.disabled = false;
+    checkboxLabel.className = 'form-check-label ml-4 font-weight-bold small text-dark';
+    checkboxLabel.innerHTML = 'I have thoroughly read, understood, and agreed to adhere strictly to all Quality Audit operating procedures, dropdown criteria, and portal rules.';
+
+    badge.className = 'badge badge-success font-weight-bold';
+    badge.innerHTML = '<i class="fas fa-check-circle mr-1"></i> Reading Complete — Checkbox Unlocked';
+
+    notice.className = 'small text-success font-weight-bold';
+    notice.innerHTML = '<i class="fas fa-check mr-1"></i> You may now check the box and confirm.';
+  }
+}
+
+function toggleAckButton() {
+  const checkbox = document.getElementById('ackCheckbox');
+  const btn = document.getElementById('ackConfirmBtn');
+  btn.disabled = !checkbox.checked;
+}
+
+function confirmAcknowledgement() {
+  sessionStorage.setItem('qa_guidelines_accepted', 'true');
+  $('#guidelinesModal').modal('hide');
+  document.getElementById('main-form').style.display = 'block';
+}
+
+// ================= THEMES =================
+const themes = {
+  classic: `body { background: #f0f3f8; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #2d3748; }
+    .navbar { background: #1a2332; box-shadow: 0 2px 10px rgba(0,0,0,0.15); padding: 0.5rem 1.25rem; }
+    .navbar-brand { font-weight: 700; color: #ffffff !important; }
+    .navbar-brand span { color: #3b82f6; }
+    .stats-bar { background: #ffffff; border: 1px solid #e2e8f0; padding: 7px 14px; border-radius: 6px; margin-bottom: 10px; font-weight: 500; font-size: 0.88rem; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+    .card { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); margin-bottom: 0.75rem; }
+    .card-header { background: #ffffff; border-bottom: 1px solid #edf2f7; font-weight: 600; color: #1e293b; font-size: 0.88rem; padding: 0.5rem 1rem; }
+    .section-icon { color: #2563eb; margin-right: 6px; }
+    .btn-primary { background: #2563eb; border: none; font-weight: 600; }
+    .btn-warning { background: #f59e0b; color: #fff; border: none; font-weight: 600; }
+    .btn-success { background: #059669; border: none; font-weight: 600; }
+    .fetch-box { background: #f8fafc; padding: 0.75rem !important; }
+    .form-group { margin-bottom: 0.5rem !important; }
+    .form-control, .form-control:focus { background: #fff; border-color: #cbd5e1; color: #1e293b; font-size: 0.84rem; height: calc(1.9rem + 2px); padding: 0.25rem 0.6rem; }
+    .form-control[readonly] { background-color: #f1f5f9; color: #475569; }
+    .table thead th { border-bottom: 2px solid #2563eb; background: #f8fafc; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.5px; color: #475569; padding: 0.45rem 0.6rem; }
+    .table td { padding: 0.4rem 0.6rem; vertical-align: middle; font-size: 0.84rem; }
+    .table-hover tbody tr:hover { background-color: #f1f5f9; }
+    .alert-info { background: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe; font-size: 0.85rem; padding: 0.5rem 0.75rem; }
+    .alert-danger { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+    .sticky-panel { position: sticky; top: 0.75rem; z-index: 10; }
+    .sla-header { background-color: #2563eb; color: #fff; }
+    .notice-card { background: #fff0f3; border: 1px solid #fed7e2 !important; border-radius: 6px; }
+    .notice-header { background: #ffe3ec; border-bottom: 1px solid #fbb6ce; font-weight: 700; color: #97266d; }
+    .notice-text { color: #702459; font-size: 0.82rem; white-space: pre-wrap; word-break: break-word; line-height: 1.5; }
+    .reminder-text { font-size: 0.81rem; white-space: pre-wrap; word-break: break-word; line-height: 1.4; color: #334155; }
+    .field-tag { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; color: #64748b; margin-bottom: 0.15rem; display: block; }
+    textarea.stretchable { resize: vertical !important; min-height: 34px; }
+    .name-error-msg { font-size: 0.72rem; color: #dc2626; font-weight: 600; margin-top: 2px; display: none; }
+    .input-invalid { border-color: #dc2626 !important; background-color: #fef2f2 !important; }
+    .red-highlighter-alert { background: #ffe6e6 !important; color: #cc0000 !important; border: 1px solid #ff9999 !important; border-radius: 4px; padding: 6px 12px; font-size: 0.83rem; margin-bottom: 0.6rem; }
+    .guard-select-box { position: relative; width: 100%; user-select: none; }
+    .guard-trigger { display: flex; justify-content: space-between; align-items: center; background-color: #fff; border: 1px solid #cbd5e1; border-radius: 4px; padding: 0.25rem 0.6rem; font-size: 0.84rem; height: calc(1.9rem + 2px); cursor: pointer; color: #1e293b; font-weight: 600; }
+    .guard-trigger:after { content: ""; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid #64748b; margin-left: 8px; }
+    .guard-select-box.locked .guard-trigger { background-color: #f1f5f9 !important; color: #94a3b8 !important; cursor: not-allowed !important; border-color: #e2e8f0 !important; }
+    .guard-select-box.locked .guard-trigger:after { border-top-color: #cbd5e1; }
+    .guard-menu { display: none; position: absolute; top: 100%; left: 0; right: 0; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 6px 18px rgba(0,0,0,0.15); z-index: 1060; margin-top: 2px; max-height: 220px; overflow-y: auto; list-style: none; padding: 0; margin-bottom: 0; }
+    .guard-menu.open { display: block; }
+    .guard-menu li { padding: 6px 10px; font-size: 0.82rem; color: #1e293b; cursor: pointer; border-bottom: 1px solid #f8fafc; font-weight: 600; }
+    .guard-menu li:hover { background-color: #2563eb; color: #ffffff; }
+    .guard-menu li.selected { background-color: #dbeafe; color: #1e40af; }
+    .row-locked { opacity: 0.45; pointer-events: none; }
+    .row-active { background-color: #eff6ff !important; border-left: 3px solid #2563eb; }
+    #guidelinesModal { background: rgba(15, 23, 42, 0.75); }
+    .sop-scroll-area { max-height: 58vh; overflow-y: auto; font-size: 0.84rem; line-height: 1.6; border: 1px solid #e2e8f0; padding: 16px; border-radius: 4px; background: #fff; }
+    .sop-section-title { font-weight: 700; color: #1e3a8a; border-bottom: 1px solid #cbd5e1; padding-bottom: 3px; margin-top: 12px; margin-bottom: 8px; text-transform: uppercase; font-size: 0.82rem; letter-spacing: 0.5px; }
+    .coaching-required-alert { border-color: #dc2626 !important; background-color: #fff1f2 !important; box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.2) !important; }
+    .coaching-valid-alert { border-color: #16a34a !important; background-color: #f0fdf4 !important; box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.2) !important; }
+    .word-limit-msg { font-size: 0.74rem; font-weight: 600; margin-top: 3px; }`,
+  pro: `body { background: #0b0f17; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #e0e5ef; }
+    .navbar { background: rgba(10, 14, 20, 0.95) !important; border-bottom: 1px solid rgba(255,255,255,0.08); box-shadow: 0 4px 20px rgba(0,0,0,0.6); padding: 0.5rem 1.25rem; }
+    .navbar-brand { color: #4da8da !important; font-weight: 700; }
+    .navbar-brand span { color: #00e5ff; }
+    .stats-bar { background: rgba(255,255,255,0.05); color: #e0e5ef; border: 1px solid rgba(255,255,255,0.1); padding: 7px 14px; border-radius: 6px; margin-bottom: 10px; font-size: 0.88rem; }
+    .card { background: rgba(20, 25, 35, 0.85); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; margin-bottom: 0.75rem; }
+    .card-header { background: rgba(255,255,255,0.04); border-bottom: 1px solid rgba(255,255,255,0.08); color: #ffffff; font-weight: 600; padding: 0.5rem 1rem; }
+    .section-icon { color: #00e5ff; margin-right: 6px; }
+    .btn-primary { background: linear-gradient(135deg, #0072ff, #00c6ff); border: none; font-weight: 600; color: #fff; }
+    .btn-warning { background: linear-gradient(135deg, #f7971e, #ffd200); border: none; color: #1a1a1a; font-weight: 600; }
+    .btn-success { background: linear-gradient(135deg, #11998e, #38ef7d); border: none; color: #fff; font-weight: 600; }
+    .fetch-box { background: rgba(255,255,255,0.03); padding: 0.75rem !important; }
+    .form-group { margin-bottom: 0.5rem !important; }
+    .form-control, .form-control:focus { background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.2); color: #ffffff; font-size: 0.84rem; height: calc(1.9rem + 2px); padding: 0.25rem 0.6rem; }
+    .form-control[readonly] { background-color: rgba(255,255,255,0.03); color: #b0b8c5; }
+    .table { color: #e0e5ef; }
+    .table thead th { border-bottom: 2px solid rgba(0,229,255,0.5); background: rgba(255,255,255,0.05); color: #a0aec0; padding: 0.45rem 0.6rem; font-size: 0.78rem; }
+    .table td { border-top: 1px solid rgba(255,255,255,0.06); padding: 0.4rem 0.6rem; font-size: 0.84rem; }
+    .table-hover tbody tr:hover { background-color: rgba(255,255,255,0.05); }
+    .alert-info { background: rgba(56,189,248,0.15); border-color: #38bdf8; color: #bae6fd; font-size: 0.85rem; padding: 0.5rem 0.75rem; }
+    .alert-danger { background: rgba(255,80,80,0.15); border-color: #ff5050; color: #ffaaaa; }
+    .sticky-panel { position: sticky; top: 0.75rem; z-index: 10; }
+    .sla-header { background-color: #1a3a5c; color: #fff; }
+    .notice-card { background: rgba(255, 80, 120, 0.1); border: 1px solid rgba(255, 80, 120, 0.3) !important; border-radius: 6px; }
+    .notice-header { background: rgba(255, 80, 120, 0.2); border-bottom: 1px solid rgba(255, 80, 120, 0.3); font-weight: 700; color: #ff99b3; }
+    .notice-text { color: #ffd6e0; font-size: 0.82rem; white-space: pre-wrap; word-break: break-word; line-height: 1.5; }
+    .reminder-text { font-size: 0.81rem; white-space: pre-wrap; word-break: break-word; line-height: 1.4; color: #cbd5e1; }
+    .field-tag { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; color: #a0aec0; margin-bottom: 0.15rem; display: block; }
+    textarea.stretchable { resize: vertical !important; min-height: 34px; }
+    .name-error-msg { font-size: 0.72rem; color: #ff6b6b; font-weight: 600; margin-top: 2px; display: none; }
+    .input-invalid { border-color: #ff6b6b !important; background-color: rgba(255, 80, 80, 0.2) !important; }
+    .red-highlighter-alert { background: rgba(255, 80, 80, 0.2) !important; color: #ff9999 !important; border: 1px solid #ff6b6b !important; border-radius: 4px; padding: 6px 12px; font-size: 0.83rem; margin-bottom: 0.6rem; }
+    .guard-select-box { position: relative; width: 100%; user-select: none; }
+    .guard-trigger { display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; padding: 0.25rem 0.6rem; font-size: 0.84rem; height: calc(1.9rem + 2px); cursor: pointer; color: #fff; font-weight: 600; }
+    .guard-trigger:after { content: ""; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid #a0aec0; margin-left: 8px; }
+    .guard-select-box.locked .guard-trigger { background: rgba(255,255,255,0.02) !important; color: #64748b !important; cursor: not-allowed !important; border-color: rgba(255,255,255,0.05) !important; }
+    .guard-select-box.locked .guard-trigger:after { border-top-color: #64748b; }
+    .guard-menu { display: none; position: absolute; top: 100%; left: 0; right: 0; background: #1a1f2b; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; box-shadow: 0 6px 18px rgba(0,0,0,0.6); z-index: 1060; margin-top: 2px; max-height: 220px; overflow-y: auto; list-style: none; padding: 0; margin-bottom: 0; }
+    .guard-menu.open { display: block; }
+    .guard-menu li { padding: 6px 10px; font-size: 0.82rem; color: #e0e5ef; cursor: pointer; border-bottom: 1px solid rgba(255,255,255,0.06); font-weight: 600; }
+    .guard-menu li:hover { background-color: #0072ff; color: #ffffff; }
+    .guard-menu li.selected { background-color: rgba(0,114,255,0.3); font-weight: bold; }
+    .row-locked { opacity: 0.35; pointer-events: none; }
+    .row-active { background-color: rgba(0, 114, 255, 0.15) !important; border-left: 3px solid #00c6ff; }
+    #guidelinesModal { background: rgba(5, 7, 10, 0.85); }
+    .sop-scroll-area { max-height: 58vh; overflow-y: auto; font-size: 0.84rem; line-height: 1.6; border: 1px solid rgba(255,255,255,0.15); padding: 16px; border-radius: 4px; background: rgba(20, 25, 35, 0.95); color: #cbd5e1; }
+    .sop-section-title { font-weight: 700; color: #38bdf8; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 3px; margin-top: 12px; margin-bottom: 8px; text-transform: uppercase; font-size: 0.82rem; letter-spacing: 0.5px; }
+    .coaching-required-alert { border-color: #ff6b6b !important; background-color: rgba(255, 80, 80, 0.25) !important; box-shadow: 0 0 0 3px rgba(255, 80, 80, 0.3) !important; }
+    .coaching-valid-alert { border-color: #22c55e !important; background-color: rgba(34, 197, 94, 0.2) !important; box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.3) !important; }
+    .word-limit-msg { font-size: 0.74rem; font-weight: 600; margin-top: 3px; }`
+};
+
+function setTheme(theme) {
+  document.getElementById('theme-style').textContent = themes[theme];
+  document.querySelectorAll('.btn-group .btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.btn-group .btn').forEach(b => {
+    if (b.textContent.trim().toLowerCase() === theme) b.classList.add('active');
+  });
+  sessionStorage.setItem('qa-theme', theme);
+}
+(function() { setTheme(sessionStorage.getItem('qa-theme') || 'classic'); })();
+
+// ================= GLOBAL CONFIG =================
+let currentQueue = '';
+let auditStartTime = null;
+let masterAgentRoster = [];
+let rootCauseData = {};
+let fcrReasonMap = {};
+let fcrAlternativeSubReasonMap = {};
+let externalSubReasons = [];
+let hrTemplateNamesMaster = [];
+
+const weights = [10, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5];
+
+const questions = [
+  "Was the case handled correctly?",
+  "Did the associate use an internal article?",
+  "Did the associate refer to the correct external article and explain self-serve options?",
+  "Did the associate acknowledge the reopen reason?",
+  "Did the associate correctly transfer the case?",
+  "Did the associate send the C -SAT survey, If required?",
+  "Did the associate use the HR/UA template when required?",
+  "Did the associate answer all the questions?",
+  "Was the root cause acknowledged?",
+  "Did the associate update the case status correctly?",
+  "Was the internal case comment written correctly?",
+  "Was the associate professional and respectful throughout the interactions?",
+  "Was the email formatting correct and free of spelling errors?",
+  "Was the correct case category (L1,L2,L3,L4) selected?",
+  "Was the case handled efficiently and within expected AAT/AHT guidelines",
+  "Did the associate provide the resolution before crossing out the case?",
+  "Did the associate followed IRIS GWF/ Agentic AI",
+  "Did the associate prevent from disclosing internal information to the seller",
+  "Was the operating behavior correct?"
+];
+
+const mandatoryYesNoQuestions = [8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19];
+
+function validateAgainstRoster(inputElement) {
+  const val = inputElement.value.trim();
+  const errorMsg = document.getElementById('agentNameError');
+
+  if (!val) {
+    inputElement.classList.remove('input-invalid');
+    errorMsg.style.display = 'none';
+    return false;
+  }
+
+  const isDateOrTime = /^\d{1,4}[-\/\.]\d{1,2}[-\/\.]\d{1,4}$|^\d{1,2}:\d{2}(:\d{2})?/;
+  if (isDateOrTime.test(val) || /[:\/]/.test(val)) {
+    inputElement.classList.add('input-invalid');
+    errorMsg.innerHTML = '<i class="fas fa-times-circle mr-1"></i> Dates or timestamps not allowed.';
+    errorMsg.style.display = 'block';
+    return false;
+  }
+
+  if (masterAgentRoster.length > 0) {
+    const matchedName = masterAgentRoster.find(
+      name => name.toLowerCase() === val.toLowerCase()
+    );
+
+    if (!matchedName) {
+      inputElement.classList.add('input-invalid');
+      errorMsg.innerHTML = '<i class="fas fa-times-circle mr-1"></i> Not found in roster.';
+      errorMsg.style.display = 'block';
+      return false;
+    } else {
+      inputElement.value = matchedName;
+      inputElement.classList.remove('input-invalid');
+      errorMsg.style.display = 'none';
+      return true;
+    }
+  }
+
+  inputElement.classList.remove('input-invalid');
+  errorMsg.style.display = 'none';
+  return true;
+}
+
+// ================= INIT =================
+window.onload = function() {
+  google.script.run.withSuccessHandler(function(auth) {
+    if (auth) {
+      checkGuidelinesAcknowledged();
+      loadSheetDropdown();
+      buildQuestionsTable();
+      loadBackendConfig();
+      loadAgentRoster();
+      preloadHRTemplateNames();
+      google.script.run.withSuccessHandler(function(subs) {
+        externalSubReasons = subs;
+      }).getExternalTeamSubReasons();
+      google.script.run.withSuccessHandler(updateStats).getUserStats();
+    } else {
+      document.getElementById('auth-alert').style.display = 'block';
+      document.getElementById('auth-alert').innerText = 'Access Denied: You are not authorized.';
+    }
+  }).isAuthorized();
+};
+
+function updateStats(stats) {
+  if (stats) {
+    document.getElementById('welcomeName').innerText = stats.qaName || 'QA';
+    document.getElementById('statsBar').style.display = 'block';
+  }
+}
+
+function loadAgentRoster() {
+  google.script.run
+    .withSuccessHandler(function(names) {
+      if (names && names.length > 0) {
+        masterAgentRoster = names;
+        const datalist = document.getElementById('rosterList');
+        datalist.innerHTML = '';
+        names.forEach(name => {
+          const opt = document.createElement('option');
+          opt.value = name;
+          datalist.appendChild(opt);
+        });
+      }
+    })
+    .getSalesforceAgentRoster();
+}
+
+function formatNoticeContent(text) {
+  if (!text) return '';
+  const urlRegex = /(https?:\/\/[^\s]+)/g;
+  return text.replace(urlRegex, function(url) {
+    return `<a href="${url}" target="_blank" style="color:#0071dc; text-decoration:underline; font-weight:600;">Open Link <i class="fas fa-external-link-alt small"></i></a>`;
+  });
+}
+
+function loadBackendConfig() {
+  google.script.run
+    .withSuccessHandler(function(config) {
+      if (config) {
+        const noticesBox = document.getElementById('noticesContainer');
+        if (config.notices && config.notices.length > 0) {
+          noticesBox.innerHTML = config.notices.map((n, idx) => `
+            <div class="${idx < config.notices.length - 1 ? 'mb-2 pb-2' : ''}" style="${idx < config.notices.length - 1 ? 'border-bottom: 1px dashed #fbb6ce;' : ''}">
+              <div class="d-flex justify-content-between align-items-center mb-1">
+                <span class="font-weight-bold text-danger small">${n.title || 'NOTICE'}</span>
+                ${n.subtitle ? `<span class="badge badge-light text-danger border border-danger">${n.subtitle}</span>` : ''}
+              </div>
+              <div class="notice-text">${formatNoticeContent(n.content)}</div>
+            </div>
+          `).join('');
+        } else {
+          noticesBox.innerHTML = '<div class="text-muted small">No active notices.</div>';
+        }
+
+        const remindersBox = document.getElementById('remindersContainer');
+        if (config.reminders && config.reminders.length > 0) {
+          remindersBox.innerHTML = config.reminders.map((r, idx) => `
+            <div class="${idx < config.reminders.length - 1 ? 'mb-2 pb-2 border-bottom' : ''}">
+              <div class="font-weight-bold text-primary small mb-1">${r.title}</div>
+              <div class="reminder-text">${r.content}</div>
+            </div>
+          `).join('');
+        } else {
+          remindersBox.innerHTML = '<div class="text-muted small">No reminders set.</div>';
+        }
+      }
+    })
+    .getPortalConfig();
+}
+
+function preloadHRTemplateNames() {
+  google.script.run
+    .withSuccessHandler(function(names) {
+      if (names && names.length > 0) {
+        hrTemplateNamesMaster = names;
+      }
+    })
+    .getHRTemplateNames();
+}
+
+function loadSheetDropdown() {
+  google.script.run.withSuccessHandler(function(sheets) {
+    configureGuardDropdown('sheetSelect', sheets, sheets[0] || '', function(val) {
+      onQueueChange();
+    });
+    if (sheets.length > 0) onQueueChange();
+  }).getSheetNames();
+}
+
+// ================= SEQUENTIAL ONE-BY-ONE CHECKLIST =================
+function buildQuestionsTable() {
+  const tbody = document.getElementById('questionsBody');
+  tbody.innerHTML = '';
+
+  questions.forEach((q, i) => {
+    const qNum = i + 1;
+    const opts = [{value:'Yes', text:'Yes'}, {value:'No', text:'No'}];
+    if (!mandatoryYesNoQuestions.includes(qNum)) {
+      opts.push({value:'NA', text:'NA'});
+    }
+
+    const tr = document.createElement('tr');
+    tr.id = 'qRow_' + qNum;
+    if (qNum > 1) tr.classList.add('row-locked');
+    else tr.classList.add('row-active');
+
+    tr.innerHTML = `
+      <td class="font-weight-bold text-muted">${qNum}</td>
+      <td>${q}</td>
+      <td class="font-weight-bold">${weights[i]}</td>
+      <td>
+        <div class="guard-select-box ${qNum > 1 ? 'locked' : ''}" id="box_q${qNum}">
+          <input type="hidden" id="q${qNum}" value="">
+          <div class="guard-trigger" onclick="toggleGuardDropdown('q${qNum}', event)">--</div>
+          <ul class="guard-menu" id="menu_q${qNum}"></ul>
+        </div>
+      </td>`;
+
+    tbody.appendChild(tr);
+
+    configureGuardDropdown('q' + qNum, opts, '', function(selectedVal) {
+      onQuestionAnswered(qNum);
+    });
+  });
+}
+
+function onQuestionAnswered(qNum) {
+  const currentVal = document.getElementById('q' + qNum).value;
+  if (!currentVal) return;
+
+  const currentRow = document.getElementById('qRow_' + qNum);
+  if (currentRow) currentRow.classList.remove('row-active');
+
+  const nextNum = qNum + 1;
+  if (nextNum <= 19) {
+    const nextRow = document.getElementById('qRow_' + nextNum);
+    if (nextRow) {
+      nextRow.classList.remove('row-locked');
+      nextRow.classList.add('row-active');
+    }
+    lockGuardDropdown('q' + nextNum, false);
+  }
+
+  checkAndHighlightCoachingRequirement();
+}
+
+function getActiveCoachingElement() {
+  if (currentQueue === 'Reopen' || currentQueue === 'FCR') {
+    return document.getElementById('coachingNote');
+  } else if (currentQueue === 'General Audit') {
+    return document.getElementById('coachingDetails');
+  } else if (currentQueue === 'CSAT') {
+    return document.getElementById('csatCoachingNote');
+  } else if (currentQueue === 'BPO Coaching') {
+    return document.getElementById('auditorNote');
+  }
+  return null;
+}
+
+function hasAnyDefect() {
+  for (let i = 1; i <= 19; i++) {
+    const qElem = document.getElementById('q' + i);
+    if (qElem && qElem.value === 'No') return true;
+  }
+  return false;
+}
+
+function isCoachingTextValid(val) {
+  const text = (val || '').trim();
+  const dummyWords = ['na', 'n/a', 'none', 'nil', 'no', 'not applicable', '-', '--', 'null', 'nothing', 'ok', 'good', 'fine'];
+  if (!text || text.length < 15) return false;
+  if (dummyWords.includes(text.toLowerCase())) return false;
+  return true;
+}
+
+function handleCoachingInput(elem) {
+  if (!elem) return;
+  const defect = hasAnyDefect();
+
+  if (defect) {
+    if (isCoachingTextValid(elem.value)) {
+      elem.classList.remove('coaching-required-alert');
+      elem.classList.add('coaching-valid-alert');
+    } else {
+      elem.classList.remove('coaching-valid-alert');
+      elem.classList.add('coaching-required-alert');
+    }
+  } else {
+    elem.classList.remove('coaching-required-alert', 'coaching-valid-alert');
+  }
+}
+
+function checkAndHighlightCoachingRequirement() {
+  const coachingTarget = getActiveCoachingElement();
+  if (!coachingTarget) return;
+
+  const defect = hasAnyDefect();
+
+  if (defect) {
+    if (isCoachingTextValid(coachingTarget.value)) {
+      coachingTarget.classList.remove('coaching-required-alert');
+      coachingTarget.classList.add('coaching-valid-alert');
+    } else {
+      coachingTarget.classList.remove('coaching-valid-alert');
+      coachingTarget.classList.add('coaching-required-alert');
+      coachingTarget.placeholder = 'DEFECT DETECTED: Marked "No". Detailed actionable coaching is required (min 15 chars). "N/A" is NOT accepted.';
+    }
+  } else {
+    coachingTarget.classList.remove('coaching-required-alert', 'coaching-valid-alert');
+    coachingTarget.placeholder = 'Enter coaching notes...';
+  }
+}
+
+function validateDefectCoaching(textValue, fieldLabel) {
+  const val = (textValue || '').trim();
+  const disallowedDummyWords = ['na', 'n/a', 'none', 'nil', 'no', 'not applicable', '-', '--', 'null', 'nothing', 'ok', 'good', 'fine'];
+
+  if (!val) {
+    alert(`Validation Error: One or more parameters were marked as "No". ${fieldLabel} cannot be left empty.`);
+    return false;
+  }
+
+  if (disallowedDummyWords.includes(val.toLowerCase())) {
+    alert(`QA Adherence Violation: You deducted marks (marked "No") but entered "${val}" in ${fieldLabel}. You must write a detailed, actionable coaching note.`);
+    return false;
+  }
+
+  if (val.length < 15) {
+    alert(`Validation Error: ${fieldLabel} is too brief (${val.length} chars). Detailed explanation of the defect and corrective coaching must be at least 15 characters long.`);
+    return false;
+  }
+
+  return true;
+}
+
+function countWords(str) {
+  const trimmed = (str || '').trim();
+  if (!trimmed) return 0;
+  return trimmed.split(/\s+/).length;
+}
+
+function handleRemarkWordLimit(elem) {
+  if (!elem) return;
+  const count = countWords(elem.value);
+  const msgElem = document.getElementById(elem.id + '_msg');
+
+  if (count > 7) {
+    elem.classList.add('input-invalid');
+    if (msgElem) {
+      msgElem.className = 'word-limit-msg text-danger';
+      msgElem.innerHTML = `<i class="fas fa-exclamation-triangle mr-1"></i> 7 words exceeded! Limited to 7 words only. (Current: ${count} words)`;
+    }
+  } else {
+    elem.classList.remove('input-invalid');
+    if (msgElem) {
+      if (count > 0) {
+        msgElem.className = 'word-limit-msg text-muted';
+        msgElem.innerHTML = `<i class="fas fa-check-circle text-success mr-1"></i> Word count: ${count}/7 words`;
+      } else {
+        msgElem.innerHTML = '';
+      }
+    }
+  }
+}
+
+function resetSequentialChecklist() {
+  for (let i = 1; i <= 19; i++) {
+    const hidden = document.getElementById('q' + i);
+    if (hidden) hidden.value = '';
+    const box = document.getElementById('box_q' + i);
+    if (box) {
+      const trigger = box.querySelector('.guard-trigger');
+      if (trigger) trigger.textContent = '--';
+      const menu = document.getElementById('menu_q' + i);
+      if (menu) menu.querySelectorAll('li').forEach(li => li.classList.remove('selected'));
+      if (i > 1) {
+        box.classList.add('locked');
+      } else {
+        box.classList.remove('locked');
+      }
+    }
+    const row = document.getElementById('qRow_' + i);
+    if (row) {
+      row.classList.remove('row-active');
+      if (i > 1) row.classList.add('row-locked');
+      else row.classList.add('row-active');
+    }
+  }
+  const coachingTarget = getActiveCoachingElement();
+  if (coachingTarget) {
+    coachingTarget.classList.remove('coaching-required-alert', 'coaching-valid-alert');
+    coachingTarget.placeholder = 'Required...';
+  }
+}
+
+// ================= QUEUE CHANGE =================
+function onQueueChange() {
+  currentQueue = document.getElementById('sheetSelect').value;
+  const checklistCard = document.getElementById('checklistCard');
+  const checklistPrompt = document.getElementById('checklistPromptAlert');
+  const caseAcceptContainer = document.getElementById('caseAcceptContainer');
+  const touchContainer = document.getElementById('touchCounterContainer');
+  const dropdownPrompt = document.getElementById('dropdownPromptAlert');
+  const dropdownCard = document.getElementById('dropdownCard');
+  const dropdownSection = document.getElementById('dropdownSection');
+  const diagnosticCard = document.getElementById('diagnosticCard');
+  const diagnosticSection = document.getElementById('diagnosticSection');
+  const csatExtraFields = document.getElementById('csatExtraFields');
+  const csatDiagnosticAbove = document.getElementById('csatDiagnosticAbove');
+  const bpocExtraFields = document.getElementById('bpocExtraFields');
+  const catHashRow = document.getElementById('catHashRow');
+  const slaTableContainer = document.getElementById('slaTableContainer');
+
+  csatExtraFields.style.display = 'none';
+  csatDiagnosticAbove.style.display = 'none';
+  bpocExtraFields.style.display = 'none';
+  catHashRow.style.display = 'flex';
+  diagnosticCard.style.display = 'block';
+  slaTableContainer.style.display = 'none';
+
+  if (currentQueue.startsWith('SLA_')) {
+    slaTableContainer.style.display = 'block';
+    touchContainer.style.display = 'none';
+    caseAcceptContainer.style.display = 'none';
+  } else if (['Need Info Abandoned', 'ADR', 'AHT'].includes(currentQueue)) {
+    touchContainer.style.display = 'none';
+    caseAcceptContainer.style.display = 'none';
+  } else {
+    touchContainer.style.display = 'block';
+    caseAcceptContainer.style.display = 'block';
+  }
+
+  const scoringQueues = ['Reopen', 'FCR', 'General Audit', 'CSAT', 'BPO Coaching'];
+  const isScoring = scoringQueues.includes(currentQueue);
+  checklistCard.style.display = isScoring ? 'block' : 'none';
+  if (checklistPrompt) checklistPrompt.style.display = isScoring ? 'block' : 'none';
+
+  if (currentQueue === 'Reopen' || currentQueue === 'FCR') {
+    dropdownPrompt.style.display = 'block';
+    dropdownCard.style.display = 'block';
+    if (currentQueue === 'Reopen') {
+      google.script.run.withSuccessHandler(function(data) {
+        rootCauseData = data;
+        dropdownSection.innerHTML = buildReopenDropdownHTML();
+        configureGuardDropdown('rootCauseType', Object.keys(rootCauseData).map(k => ({value: k, text: k.replace('\\Policy', '/Policy')})), '', onReopenTypeChange);
+      }).getReopenRootCauseHierarchy();
+    } else if (currentQueue === 'FCR') {
+      google.script.run.withSuccessHandler(function(data) {
+        fcrReasonMap = data;
+        google.script.run.withSuccessHandler(function(altData) {
+          fcrAlternativeSubReasonMap = altData;
+          dropdownSection.innerHTML = buildFCRDropdownHTML();
+          configureGuardDropdown('fcrCategory', Object.keys(fcrReasonMap), '', onFCRCategoryChange);
+        }).getFCRAlternativeSubReasonMap();
+      }).getFCRReasonMap();
+    }
+  } else {
+    dropdownPrompt.style.display = 'none';
+    dropdownCard.style.display = 'none';
+    dropdownSection.innerHTML = '';
+  }
+
+  if (currentQueue === 'CSAT') {
+    csatExtraFields.style.display = 'flex';
+    csatDiagnosticAbove.innerHTML = buildCSATDiagnosticHTML();
+    csatDiagnosticAbove.style.display = 'block';
+    diagnosticCard.style.display = 'none';
+    diagnosticSection.innerHTML = '';
+    catHashRow.style.display = 'flex';
+
+    configureGuardDropdown('errorType', ['Policy', 'System', 'Agent'], '', onErrorTypeChange);
+    configureGuardDropdown('csatAuditStatus', ['Valid', 'Invalid'], '', onCSATAuditStatusChange);
+    lockGuardDropdown('csatAuditStatus', true);
+  } else if (currentQueue === 'BPO Coaching') {
+    bpocExtraFields.style.display = 'block';
+    catHashRow.style.display = 'none';
+    loadDiagnosticSection(currentQueue);
+  } else {
+    loadDiagnosticSection(currentQueue);
+  }
+
+  resetSequentialChecklist();
+}
+
+// ================= REOPEN / FCR DROPDOWNS =================
+function buildReopenDropdownHTML() {
+  return `
+    <div class="form-row">
+      <div class="col-md-6 form-group">
+        <label class="field-tag">Root Cause Type <span class="text-danger">*</span></label>
+        <div class="guard-select-box" id="box_rootCauseType">
+          <input type="hidden" id="rootCauseType" value="">
+          <div class="guard-trigger" onclick="toggleGuardDropdown('rootCauseType', event)">-- Select --</div>
+          <ul class="guard-menu" id="menu_rootCauseType"></ul>
+        </div>
+      </div>
+      <div class="col-md-6 form-group">
+        <label class="field-tag">Subcategory <span class="text-danger">*</span></label>
+        <div class="guard-select-box locked" id="box_subcategory">
+          <input type="hidden" id="subcategory" value="">
+          <div class="guard-trigger" onclick="toggleGuardDropdown('subcategory', event)">-- Select --</div>
+          <ul class="guard-menu" id="menu_subcategory"></ul>
+        </div>
+      </div>
+    </div>
+    <div class="form-row" id="thirdDropdownRow" style="display:none;">
+      <div class="col-md-6 form-group">
+        <label class="field-tag">Detail <span class="text-danger">*</span></label>
+        <div class="guard-select-box" id="box_detailDropdown">
+          <input type="hidden" id="detailDropdown" value="">
+          <div class="guard-trigger" onclick="toggleGuardDropdown('detailDropdown', event)">-- Select --</div>
+          <ul class="guard-menu" id="menu_detailDropdown"></ul>
+        </div>
+      </div>
+    </div>
+    <div class="form-group" id="remarkRow" style="display:none;">
+      <label class="field-tag" id="remarkLabel">Remark (Other) <span class="text-danger">*</span></label>
+      <div id="remarkInputContainer">
+        <textarea id="rootCauseRemark" class="form-control stretchable" rows="2" placeholder="Required..."></textarea>
+      </div>
+      <div id="rootCauseRemark_msg"></div>
+    </div>`;
+}
+
+function onReopenTypeChange(type) {
+  document.getElementById('thirdDropdownRow').style.display = 'none';
+  document.getElementById('remarkRow').style.display = 'none';
+  
+  if (type && rootCauseData[type]) {
+    const subs = rootCauseData[type].map(item => item.label);
+    configureGuardDropdown('subcategory', subs, '', onReopenSubChange);
+    lockGuardDropdown('subcategory', false);
+  } else {
+    lockGuardDropdown('subcategory', true);
+  }
+}
+
+function onReopenSubChange(subVal) {
+  const type = document.getElementById('rootCauseType').value;
+  const thirdRow = document.getElementById('thirdDropdownRow');
+  const remarkRow = document.getElementById('remarkRow');
+  const remarkContainer = document.getElementById('remarkInputContainer');
+  const remarkLabel = document.getElementById('remarkLabel');
+  const remarkMsg = document.getElementById('rootCauseRemark_msg');
+
+  thirdRow.style.display = 'none';
+  remarkRow.style.display = 'none';
+  if (remarkMsg) remarkMsg.innerHTML = '';
+
+  if (type && subVal && rootCauseData[type]) {
+    const found = rootCauseData[type].find(item => item.label === subVal);
+    if (found && found.hasDetail) {
+      configureGuardDropdown('detailDropdown', found.detailOptions, '', onDetailChange);
+      thirdRow.style.display = 'flex';
+      lockGuardDropdown('detailDropdown', false);
+    }
+
+    if (subVal === 'HR Template Used') {
+      remarkLabel.innerHTML = 'HR Template Name <span class="text-danger">*</span>';
+      remarkContainer.innerHTML = `
+        <div class="guard-select-box" id="box_rootCauseRemark">
+          <input type="hidden" id="rootCauseRemark" value="">
+          <div class="guard-trigger" onclick="toggleGuardDropdown('rootCauseRemark', event)">-- Select HR Template --</div>
+          <div class="guard-menu" id="menu_rootCauseRemark" style="padding-top: 0;">
+            <div class="p-1 border-bottom sticky-top bg-white" onclick="event.stopPropagation();">
+              <input type="text" id="hrTemplateSearchInput" class="form-control form-control-sm" placeholder="Search template..." oninput="filterHRTemplateOptions(this.value)" autocomplete="off">
+            </div>
+            <ul class="list-unstyled mb-0" id="list_rootCauseRemark"></ul>
+          </div>
+        </div>`;
+      remarkRow.style.display = 'block';
+      renderHRTemplateList(hrTemplateNamesMaster);
+    } else if (subVal === 'IRIS-GWF/Agentic AI Followed') {
+      remarkLabel.innerHTML = 'Remark (Other) <span class="text-danger">*</span>';
+      remarkContainer.innerHTML = `<textarea id="rootCauseRemark" class="form-control stretchable" rows="2" oninput="handleRemarkWordLimit(this)" placeholder="Required (Max 7 words)..."></textarea>`;
+      remarkRow.style.display = 'block';
+      const remarkElem = document.getElementById('rootCauseRemark');
+      if (remarkElem) remarkElem.focus();
+    } else if (['Other - see remark', 'UA Template Used'].includes(subVal)) {
+      remarkLabel.innerHTML = 'Remark (Other) <span class="text-danger">*</span> <small class="text-muted font-weight-normal">(Max 7 words)</small>';
+      remarkContainer.innerHTML = `<textarea id="rootCauseRemark" class="form-control stretchable" rows="2" oninput="handleRemarkWordLimit(this)" placeholder="Required (Max 7 words)..."></textarea>`;
+      remarkRow.style.display = 'block';
+      const remarkElem = document.getElementById('rootCauseRemark');
+      if (remarkElem) remarkElem.focus();
+    }
+  }
+}
+
+function renderHRTemplateList(items) {
+  const ul = document.getElementById('list_rootCauseRemark');
+  if (!ul) return;
+  ul.innerHTML = '';
+
+  const selectedVal = document.getElementById('rootCauseRemark') ? document.getElementById('rootCauseRemark').value : '';
+
+  if (items.length === 0) {
+    const emptyLi = document.createElement('li');
+    emptyLi.textContent = 'No matching templates';
+    emptyLi.className = 'text-muted font-italic';
+    emptyLi.style.cursor = 'default';
+    ul.appendChild(emptyLi);
+    return;
+  }
+
+  items.forEach(name => {
+    const li = document.createElement('li');
+    li.textContent = name;
+    if (name === selectedVal) li.classList.add('selected');
+    li.onclick = (e) => {
+      selectGuardOption('rootCauseRemark', name, name, e, null);
+      const searchBox = document.getElementById('hrTemplateSearchInput');
+      if (searchBox) searchBox.value = '';
+      renderHRTemplateList(hrTemplateNamesMaster);
+    };
+    ul.appendChild(li);
+  });
+}
+
+function filterHRTemplateOptions(keyword) {
+  const term = (keyword || '').toLowerCase().trim();
+  const filtered = hrTemplateNamesMaster.filter(name => name.toLowerCase().includes(term));
+  renderHRTemplateList(filtered);
+}
+
+function onDetailChange(val) {
+  const remarkRow = document.getElementById('remarkRow');
+  const remarkLabel = document.getElementById('remarkLabel');
+  const remarkContainer = document.getElementById('remarkInputContainer');
+  const remarkMsg = document.getElementById('rootCauseRemark_msg');
+  if (remarkMsg) remarkMsg.innerHTML = '';
+
+  if (val === 'Other - see remark' || val === 'Refund Dispute -others (details see remark)') {
+    remarkLabel.innerHTML = 'Remark (Other) <span class="text-danger">*</span> <small class="text-muted font-weight-normal">(Max 7 words)</small>';
+    remarkContainer.innerHTML = `<textarea id="rootCauseRemark" class="form-control stretchable" rows="2" oninput="handleRemarkWordLimit(this)" placeholder="Required (Max 7 words)..."></textarea>`;
+    remarkRow.style.display = 'block';
+    const remarkElem = document.getElementById('rootCauseRemark');
+    if (remarkElem) remarkElem.focus();
+  } else {
+    remarkRow.style.display = 'none';
+  }
+}
+
+function buildFCRDropdownHTML() {
+  return `
+    <div class="form-row">
+      <div class="col-md-6 form-group">
+        <label class="field-tag">FCR Category <span class="text-danger">*</span></label>
+        <div class="guard-select-box" id="box_fcrCategory">
+          <input type="hidden" id="fcrCategory" value="">
+          <div class="guard-trigger" onclick="toggleGuardDropdown('fcrCategory', event)">-- Select --</div>
+          <ul class="guard-menu" id="menu_fcrCategory"></ul>
+        </div>
+      </div>
+      <div class="col-md-6 form-group">
+        <label class="field-tag">FCR Subcategory <span class="text-danger">*</span></label>
+        <div class="guard-select-box locked" id="box_fcrSubcategory">
+          <input type="hidden" id="fcrSubcategory" value="">
+          <div class="guard-trigger" onclick="toggleGuardDropdown('fcrSubcategory', event)">-- Select --</div>
+          <ul class="guard-menu" id="menu_fcrSubcategory"></ul>
+        </div>
+      </div>
+    </div>
+    <div class="form-row" id="fcrAlternativeRow" style="display:none;">
+      <div class="col-md-6 form-group">
+        <label class="field-tag">Alternative Sub Reason <span class="text-danger">*</span></label>
+        <div class="guard-select-box" id="box_fcrAlternativeSub">
+          <input type="hidden" id="fcrAlternativeSub" value="">
+          <div class="guard-trigger" onclick="toggleGuardDropdown('fcrAlternativeSub', event)">-- Select --</div>
+          <ul class="guard-menu" id="menu_fcrAlternativeSub"></ul>
+        </div>
+      </div>
+    </div>
+    <div class="form-group" id="fcrRemarkRow" style="display:none;">
+      <label class="field-tag">Remark (Other) <span class="text-danger">*</span> <small class="text-muted font-weight-normal">(Max 7 words)</small></label>
+      <textarea id="fcrRemark" class="form-control stretchable" rows="2" oninput="handleRemarkWordLimit(this)" placeholder="Required (Max 7 words)..."></textarea>
+      <div id="fcrRemark_msg"></div>
+    </div>`;
+}
+
+function onFCRCategoryChange(cat) {
+  document.getElementById('fcrAlternativeRow').style.display = 'none';
+  document.getElementById('fcrRemarkRow').style.display = 'none';
+
+  if (cat && fcrReasonMap[cat]) {
+    configureGuardDropdown('fcrSubcategory', fcrReasonMap[cat], '', onFCRSubChange);
+    lockGuardDropdown('fcrSubcategory', false);
+  } else {
+    lockGuardDropdown('fcrSubcategory', true);
+  }
+}
+
+function onFCRSubChange(subVal) {
+  const altRow = document.getElementById('fcrAlternativeRow');
+  const remarkRow = document.getElementById('fcrRemarkRow');
+  const fcrMsg = document.getElementById('fcrRemark_msg');
+  if (fcrMsg) fcrMsg.innerHTML = '';
+  altRow.style.display = 'none';
+  remarkRow.style.display = 'none';
+
+  if (subVal && fcrAlternativeSubReasonMap[subVal]) {
+    configureGuardDropdown('fcrAlternativeSub', fcrAlternativeSubReasonMap[subVal], '', onFCRAlternativeSubChange);
+    altRow.style.display = 'flex';
+    lockGuardDropdown('fcrAlternativeSub', false);
+  }
+  if (subVal === 'Other - see remark') {
+    remarkRow.style.display = 'block';
+    const fcrElem = document.getElementById('fcrRemark');
+    if (fcrElem) fcrElem.focus();
+  }
+}
+
+function onFCRAlternativeSubChange(val) {
+  const remarkRow = document.getElementById('fcrRemarkRow');
+  const fcrMsg = document.getElementById('fcrRemark_msg');
+  if (fcrMsg) fcrMsg.innerHTML = '';
+  remarkRow.style.display = (val === 'Other - see remark') ? 'block' : 'none';
+  if (val === 'Other - see remark') {
+    const fcrElem = document.getElementById('fcrRemark');
+    if (fcrElem) fcrElem.focus();
+  }
+}
+
+// ================= CSAT STEP-BY-STEP DIAGNOSTIC =================
+function buildCSATDiagnosticHTML() {
+  return `
+    <div class="card">
+      <div class="card-header"><i class="fas fa-sitemap section-icon"></i> Diagnostic Documentation & Notes</div>
+      <div class="card-body p-2">
+        <div class="form-row">
+          <div class="col-md-6 form-group mb-1">
+            <label class="field-tag">Error Type <span class="text-danger">*</span></label>
+            <div class="guard-select-box" id="box_errorType">
+              <input type="hidden" id="errorType" value="">
+              <div class="guard-trigger" onclick="toggleGuardDropdown('errorType', event)">-- Select --</div>
+              <ul class="guard-menu" id="menu_errorType"></ul>
+            </div>
+          </div>
+          <div class="col-md-6 form-group mb-1">
+            <label class="field-tag">CSAT Audit <span class="text-danger">*</span></label>
+            <div class="guard-select-box locked" id="box_csatAuditStatus">
+              <input type="hidden" id="csatAuditStatus" value="">
+              <div class="guard-trigger" onclick="toggleGuardDropdown('csatAuditStatus', event)">-- Select --</div>
+              <ul class="guard-menu" id="menu_csatAuditStatus"></ul>
+            </div>
+          </div>
+        </div>
+        <div class="form-group mb-1">
+          <label class="field-tag">Case Details / Diagnostic Remarks Summary <span class="text-danger">*</span></label>
+          <textarea id="csatDiagRemarks" class="form-control stretchable" rows="2" placeholder="Required..."></textarea>
+        </div>
+        <div class="form-group mb-0" id="csatCoachingNoteRow" style="display:none;">
+          <label class="field-tag">Coaching Note <span class="text-danger">*</span></label>
+          <textarea id="csatCoachingNote" class="form-control stretchable" rows="2" oninput="handleCoachingInput(this)" placeholder="Required when CSAT Audit is Valid..."></textarea>
+        </div>
+      </div>
+    </div>`;
+}
+
+function onErrorTypeChange(val) {
+  lockGuardDropdown('csatAuditStatus', false);
+  if (val === 'Agent') {
+    const hidden = document.getElementById('csatAuditStatus');
+    const trigger = document.querySelector('#box_csatAuditStatus .guard-trigger');
+    if (hidden && trigger) {
+      hidden.value = 'Valid';
+      trigger.textContent = 'Valid';
+      onCSATAuditStatusChange('Valid');
+    }
+  }
+}
+
+function onCSATAuditStatusChange(val) {
+  const row = document.getElementById('csatCoachingNoteRow');
+  if (row) {
+    row.style.display = (val === 'Valid') ? 'block' : 'none';
+  }
+}
+
+// ================= OTHER DIAGNOSTICS =================
+function loadDiagnosticSection(queue) {
+  const section = document.getElementById('diagnosticSection');
+
+  if (queue === 'Need Info Abandoned') {
+    google.script.run.withSuccessHandler(function(options) {
+      section.innerHTML = `
+        <div class="form-row">
+          <div class="col-md-8 form-group mb-1">
+            <label class="field-tag">What was required? <span class="text-danger">*</span></label>
+            <div class="guard-select-box" id="box_whatWasRequired">
+              <input type="hidden" id="whatWasRequired" value="">
+              <div class="guard-trigger" onclick="toggleGuardDropdown('whatWasRequired', event)">-- Select --</div>
+              <ul class="guard-menu" id="menu_whatWasRequired"></ul>
+            </div>
+          </div>
+          <div class="col-md-4 form-group mb-1">
+            <label class="field-tag">Agent Fault <span class="text-danger">*</span></label>
+            <div class="guard-select-box locked" id="box_agentFault">
+              <input type="hidden" id="agentFault" value="">
+              <div class="guard-trigger" onclick="toggleGuardDropdown('agentFault', event)">-- Select --</div>
+              <ul class="guard-menu" id="menu_agentFault"></ul>
+            </div>
+          </div>
+        </div>
+        <div class="form-group mb-0">
+          <label class="field-tag">Summary / Remarks <span class="text-danger">*</span></label>
+          <textarea id="diagRemarks" class="form-control stretchable" rows="2" placeholder="Required summary..."></textarea>
+        </div>`;
+      configureGuardDropdown('whatWasRequired', options, '', function() {
+        lockGuardDropdown('agentFault', false);
+      });
+      configureGuardDropdown('agentFault', ['Yes', 'No'], '', null);
+    }).getNeedInfoRequiredOptions();
+  } else if (queue === 'ADR' || queue === 'AHT') {
+    const fetchFunc = queue === 'ADR' ? 'getADRReasonOptions' : 'getAHTReasonOptions';
+    google.script.run.withSuccessHandler(function(reasons) {
+      section.innerHTML = `
+        <div class="form-row">
+          <div class="col-md-4 form-group mb-1">
+            <label class="field-tag">Reason <span class="text-danger">*</span></label>
+            <div class="guard-select-box" id="box_auditReason">
+              <input type="hidden" id="auditReason" value="">
+              <div class="guard-trigger" onclick="toggleGuardDropdown('auditReason', event)">-- Select --</div>
+              <ul class="guard-menu" id="menu_auditReason"></ul>
+            </div>
+          </div>
+          <div class="col-md-4 form-group mb-1">
+            <label class="field-tag">Sub Reason <span class="text-danger">*</span></label>
+            <div class="guard-select-box locked" id="box_subReasonSelect">
+              <input type="hidden" id="subReasonSelect" value="N/A">
+              <div class="guard-trigger" onclick="toggleGuardDropdown('subReasonSelect', event)">N/A</div>
+              <ul class="guard-menu" id="menu_subReasonSelect"></ul>
+            </div>
+          </div>
+          <div class="col-md-4 form-group mb-1">
+            <label class="field-tag">Agent Fault <span class="text-danger">*</span></label>
+            <div class="guard-select-box locked" id="box_agentFault">
+              <input type="hidden" id="agentFault" value="">
+              <div class="guard-trigger" onclick="toggleGuardDropdown('agentFault', event)">-- Select --</div>
+              <ul class="guard-menu" id="menu_agentFault"></ul>
+            </div>
+          </div>
+        </div>
+        <div class="form-group mb-1">
+          <label class="field-tag">Summary / Remarks <span class="text-danger">*</span></label>
+          <textarea id="diagRemarks" class="form-control stretchable" rows="2" placeholder="Required audit summary / remarks notes..."></textarea>
+        </div>
+        <div class="form-row">
+          <div class="col-md-4 form-group mb-0">
+            <label class="field-tag">Previous Queue Name <span class="text-danger">*</span></label>
+            <input type="text" id="prevQueueName" class="form-control" placeholder="e.g. Disputes Tier 1">
+          </div>
+          <div class="col-md-4 form-group mb-0">
+            <label class="field-tag">Prev Assigned Date <span class="text-danger">*</span></label>
+            <input type="text" id="prevQueueAssignedDate" class="form-control" placeholder="DD/MM/YYYY HH:MM">
+          </div>
+          <div class="col-md-4 form-group mb-0">
+            <label class="field-tag">Latest Main Assign Date <span class="text-danger">*</span></label>
+            <input type="text" id="latestAssignDate" class="form-control" placeholder="DD/MM/YYYY HH:MM">
+          </div>
+        </div>`;
+
+      configureGuardDropdown('auditReason', reasons, '', function(val) {
+        if (val === 'Escalated to External Team') {
+          configureGuardDropdown('subReasonSelect', externalSubReasons, '', function() {
+            lockGuardDropdown('agentFault', false);
+          });
+          lockGuardDropdown('subReasonSelect', false);
+        } else {
+          configureGuardDropdown('subReasonSelect', ['N/A'], 'N/A', null);
+          lockGuardDropdown('subReasonSelect', true);
+          lockGuardDropdown('agentFault', false);
+        }
+      });
+      configureGuardDropdown('agentFault', ['Yes', 'No'], '', null);
+    })[fetchFunc]();
+  } else if (queue === 'Reopen' || queue === 'FCR') {
+    section.innerHTML = `
+      <div class="form-group mb-1">
+        <label class="field-tag">Correct Internal KB Link / Article ID <span class="text-danger">*</span></label>
+        <input type="text" id="kbLink" class="form-control" placeholder="e.g. 10101">
+      </div>
+      <div class="form-group mb-1">
+        <label class="field-tag">Case Details / Diagnostic Remarks Summary <span class="text-danger">*</span></label>
+        <textarea id="diagRemarks" class="form-control stretchable" rows="2" placeholder="Required..."></textarea>
+      </div>
+      <div class="form-group mb-0">
+        <label class="field-tag">Corrective Action Coaching Note Reference <span class="text-danger">*</span></label>
+        <textarea id="coachingNote" class="form-control stretchable" rows="2" oninput="handleCoachingInput(this)" placeholder="Enter coaching note details..."></textarea>
+      </div>`;
+  } else if (queue.startsWith('SLA_')) {
+    let serverFunction = '';
+    if (queue === 'SLA_First_Resolve') serverFunction = 'getSLAFirstResolveReasons';
+    else if (queue === 'SLA_First_Response') serverFunction = 'getSLAFirstResponseReasons';
+    else if (queue === 'SLA_Final_Resolve') serverFunction = 'getSLAFinalResolveReasons';
+
+    section.innerHTML = `
+      <div class="form-row">
+        <div class="col-md-8 form-group mb-1">
+          <label class="field-tag">Reason <span class="text-danger">*</span></label>
+          <div class="guard-select-box" id="box_slaReason">
+            <input type="hidden" id="slaReason" value="">
+            <div class="guard-trigger" onclick="toggleGuardDropdown('slaReason', event)">-- Select --</div>
+            <ul class="guard-menu" id="menu_slaReason"></ul>
+          </div>
+        </div>
+        <div class="col-md-4 form-group mb-1">
+          <label class="field-tag">Agent Fault <span class="text-danger">*</span></label>
+          <div class="guard-select-box locked" id="box_agentFault">
+            <input type="hidden" id="agentFault" value="">
+            <div class="guard-trigger" onclick="toggleGuardDropdown('agentFault', event)">-- Select --</div>
+            <ul class="guard-menu" id="menu_agentFault"></ul>
+          </div>
+        </div>
+      </div>
+      <div class="form-group mb-1">
+        <label class="field-tag">SLA - Additional Notes <span class="text-danger">*</span></label>
+        <textarea id="slaAdditionalNotes" class="form-control stretchable" rows="2" placeholder="Required..."></textarea>
+      </div>
+      <div class="form-group mb-0">
+        <label class="field-tag">Case Details / Diagnostic Remarks Summary <span class="text-danger">*</span></label>
+        <textarea id="diagRemarks" class="form-control stretchable" rows="2" placeholder="Required..."></textarea>
+      </div>`;
+
+    configureGuardDropdown('agentFault', ['Yes', 'No'], '', null);
+
+    if (serverFunction) {
+      google.script.run.withSuccessHandler(function(reasons) {
+        configureGuardDropdown('slaReason', reasons, '', function() {
+          lockGuardDropdown('agentFault', false);
+        });
+      })[serverFunction]();
+    }
+  } else if (queue === 'General Audit') {
+    section.innerHTML = `
+      <div class="form-group mb-1">
+        <label class="field-tag">Coaching Details <span class="text-danger">*</span></label>
+        <textarea id="coachingDetails" class="form-control stretchable" rows="2" oninput="handleCoachingInput(this)" placeholder="Required..."></textarea>
+      </div>
+      <div class="form-group mb-0">
+        <label class="field-tag">Case Details / Diagnostic Remarks Summary <span class="text-danger">*</span></label>
+        <textarea id="diagRemarks" class="form-control stretchable" rows="2" placeholder="Required..."></textarea>
+      </div>`;
+  } else if (queue === 'BPO Coaching') {
+    section.innerHTML = `
+      <div class="form-row">
+        <div class="col-md-6 form-group mb-1">
+          <label class="field-tag">Escalation Validity <span class="text-danger">*</span></label>
+          <div class="guard-select-box" id="box_escalationValidity">
+            <input type="hidden" id="escalationValidity" value="">
+            <div class="guard-trigger" onclick="toggleGuardDropdown('escalationValidity', event)">-- Select --</div>
+            <ul class="guard-menu" id="menu_escalationValidity"></ul>
+          </div>
+        </div>
+        <div class="col-md-6 form-group mb-1" id="challengingNoteRow" style="display:none;">
+          <label class="field-tag">Challenging Note <span class="text-danger">*</span></label>
+          <input type="text" id="challengingNote" class="form-control" placeholder="Required if INVALID...">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="col-md-6 form-group mb-1">
+          <label class="field-tag">Auditor Note <span class="text-danger">*</span></label>
+          <textarea id="auditorNote" class="form-control stretchable" rows="2" oninput="handleCoachingInput(this)" placeholder="Required..."></textarea>
+        </div>
+        <div class="col-md-6 form-group mb-1">
+          <label class="field-tag">Additional Comment <span class="text-danger">*</span></label>
+          <textarea id="additionalComment" class="form-control stretchable" rows="2" placeholder="Required..."></textarea>
+        </div>
+      </div>
+      <div class="form-group mb-0">
+        <label class="field-tag">Case Details / Diagnostic Remarks Summary <span class="text-danger">*</span></label>
+        <textarea id="diagRemarks" class="form-control stretchable" rows="2" placeholder="Required..."></textarea>
+      </div>`;
+
+    configureGuardDropdown('escalationValidity', ['VALID', 'INVALID'], '', function(val) {
+      document.getElementById('challengingNoteRow').style.display = (val === 'INVALID') ? 'block' : 'none';
+    });
+  }
+}
+
+// ================= FETCH / SKIP =================
+function fetchCase() {
+  if (!currentQueue) { alert('Select an Audit Code.'); return; }
+  document.getElementById('submitMsg').innerHTML = '';
+  document.getElementById('fetchStatus').innerText = 'Fetching...';
+  auditStartTime = new Date();
+
+  google.script.run.withSuccessHandler(function(data) {
+    if (!data) {
+      document.getElementById('fetchStatus').innerText = 'No cases available.';
+      clearCaseFields();
+    } else {
+      document.getElementById('fetchStatus').innerText = '';
+      document.getElementById('caseNumber').value = data.caseNumber;
+      
+      if (['CSAT', 'BPO Coaching', 'Need Info Abandoned', 'ADR', 'AHT'].includes(currentQueue)) {
+        document.getElementById('agentName').value = data.agentSalesforceName || '';
+        document.getElementById('agentName').readOnly = true;
+      } else {
+        document.getElementById('agentName').value = '';
+        document.getElementById('agentName').readOnly = false;
+      }
+
+      document.getElementById('lob').value = data.lob;
+      document.getElementById('qaName').value = data.qaSalesforceName || '';
+      document.getElementById('catHash').value = data.categoryHash || '';
+      
+      if (currentQueue === 'CSAT') {
+        document.getElementById('responseValue').value = data.responseValue || '';
+        document.getElementById('surveySentDate').value = data.surveySentDate || '';
+        document.getElementById('surveyCompletedDate').value = data.surveyCompletedDate || '';
+      }
+      if (data.bpocFields) {
+        document.getElementById('bpocDescription').value = data.bpocFields.description || '';
+        document.getElementById('bpocHandling').value = data.bpocFields.handling || '';
+        document.getElementById('bpocJira').value = data.bpocFields.jira || '';
+        document.getElementById('bpocKB').value = data.bpocFields.kb || '';
+        document.getElementById('bpocIssues').value = data.bpocFields.issues || '';
+      }
+      if (data.niaFields) {
+        document.getElementById('niaWeek').value = data.niaFields.week || '';
+        document.getElementById('niaAbandonedVal').value = data.niaFields.needInfoAbandoned || 'N/A';
+      }
+      resetSequentialChecklist();
+    }
+  }).withFailureHandler(function(err) {
+    document.getElementById('fetchStatus').innerText = 'Error: ' + err.message;
+  }).fetchNextCase(currentQueue);
+}
+
+function skipCurrentCase() {
+  const caseNum = document.getElementById('caseNumber').value;
+  if (!caseNum) { alert('No case to skip.'); return; }
+  google.script.run.withSuccessHandler(function() {
+    document.getElementById('fetchStatus').innerText = 'Case skipped. Fetching next...';
+    clearCaseFields();
+    fetchCase();
+  }).skipCase(caseNum, currentQueue);
+}
+
+function clearCaseFields() {
+  document.getElementById('caseNumber').value = '';
+  document.getElementById('agentName').value = '';
+  document.getElementById('agentName').readOnly = false;
+  document.getElementById('agentName').classList.remove('input-invalid');
+  document.getElementById('agentNameError').style.display = 'none';
+  document.getElementById('lob').value = '';
+  document.getElementById('qaName').value = '';
+  document.getElementById('catHash').value = '';
+  document.getElementById('touchCounter').value = '';
+  document.getElementById('caseAcceptDateTime').value = '';
+  document.getElementById('responseValue').value = '';
+  document.getElementById('surveySentDate').value = '';
+  document.getElementById('surveyCompletedDate').value = '';
+  document.getElementById('bpocDescription').value = '';
+  document.getElementById('bpocHandling').value = '';
+  document.getElementById('bpocJira').value = '';
+  document.getElementById('bpocKB').value = '';
+  document.getElementById('bpocIssues').value = '';
+  document.getElementById('niaWeek').value = '';
+  document.getElementById('niaAbandonedVal').value = '';
+  resetSequentialChecklist();
+  auditStartTime = null;
+}
+
+// ================= SUBMIT =================
+function submitAudit() {
+  if (!document.getElementById('caseNumber').value) { alert('Fetch a case first.'); return; }
+  if (!auditStartTime) { alert('Audit start time not recorded.'); return; }
+
+  const agentNameInput = document.getElementById('agentName');
+  const agentName = agentNameInput.value.trim();
+  if (!agentName) { 
+    alert('Agent Salesforce Name is required.'); 
+    agentNameInput.focus();
+    return; 
+  }
+
+  if (!agentNameInput.readOnly && !validateAgainstRoster(agentNameInput)) {
+    alert('Incorrect Agent Name: The entered name was not found in the Salesforce Roster. Please choose a valid name.');
+    agentNameInput.focus();
+    return; 
+  }
+
+  const touchCounter = document.getElementById('touchCounter').value;
+  const exemptFromTouchAndAccept = currentQueue.startsWith('SLA_') || ['Need Info Abandoned', 'ADR', 'AHT'].includes(currentQueue);
+
+  if (!exemptFromTouchAndAccept && (touchCounter === '' || touchCounter === null)) {
+    alert('Touch Counter is required.'); return;
+  }
+
+  if (!exemptFromTouchAndAccept) {
+    const acceptDate = document.getElementById('caseAcceptDateTime').value.trim();
+    if (!acceptDate) { alert('Case Accept Date & Time is required.'); return; }
+  }
+
+  const endTime = new Date();
+  const durationMinutes = Math.round((endTime - auditStartTime) / 60000);
+
+  const formData = {
+    sourceSheet: currentQueue,
+    caseNumber: document.getElementById('caseNumber').value,
+    agentSalesforceName: agentName,
+    lob: document.getElementById('lob').value,
+    qaSalesforceName: document.getElementById('qaName').value,
+    categoryHash: document.getElementById('catHash').value,
+    touchCounter: touchCounter || 0,
+    caseAcceptDateTime: document.getElementById('caseAcceptDateTime').value || '',
+    auditStartTime: auditStartTime.toISOString(),
+    auditEndTime: endTime.toISOString(),
+    auditDuration: durationMinutes
+  };
+
+  let hasDefectFound = false;
+  const defectQuestionNumbers = [];
+
+  if (['Reopen', 'FCR', 'General Audit', 'CSAT', 'BPO Coaching'].includes(currentQueue)) {
+    for (let i = 1; i <= 19; i++) {
+      const v = document.getElementById('q' + i).value;
+      if (!v) { alert(`Answer question ${i} in sequence.`); return; }
+      formData['q' + i] = v;
+      if (v === 'No') {
+        hasDefectFound = true;
+        defectQuestionNumbers.push(i);
+      }
+    }
+  }
+
+  if (currentQueue === 'Need Info Abandoned') {
+    formData.niaWeek = document.getElementById('niaWeek').value;
+    formData.niaAbandonedVal = document.getElementById('niaAbandonedVal').value;
+
+    formData.whatWasRequired = document.getElementById('whatWasRequired').value;
+    if (!formData.whatWasRequired) { alert('Select "What was required?".'); return; }
+
+    formData.agentFault = document.getElementById('agentFault').value;
+    if (!formData.agentFault) { alert('Select "Agent Fault".'); return; }
+
+    formData.diagnosticRemarks = document.getElementById('diagRemarks').value.trim();
+    if (!formData.diagnosticRemarks) { 
+      alert('Summary / Remarks is required.'); 
+      document.getElementById('diagRemarks').focus();
+      return; 
+    }
+  } else if (currentQueue === 'ADR' || currentQueue === 'AHT') {
+    formData.niaWeek = document.getElementById('niaWeek').value;
+    formData.niaAbandonedVal = 'N/A';
+
+    const reason = document.getElementById('auditReason').value;
+    if (!reason) { alert('Select Reason.'); return; }
+    formData.whatWasRequired = reason;
+
+    const subReason = document.getElementById('subReasonSelect').value;
+    if (reason === 'Escalated to External Team' && (!subReason || subReason === 'N/A')) {
+      alert('Please select a specific Sub Reason when Escalated to External Team.');
+      return;
+    }
+
+    const remarksText = document.getElementById('diagRemarks').value.trim();
+    if (!remarksText) { 
+      alert('Summary / Remarks is required.'); 
+      document.getElementById('diagRemarks').focus();
+      return; 
+    }
+    formData.diagnosticRemarks = subReason + ' - ' + remarksText;
+
+    const prevQueueName = document.getElementById('prevQueueName').value.trim();
+    if (!prevQueueName) { alert('Previous Queue Name is required.'); return; }
+    formData.prevQueueName = prevQueueName;
+
+    const prevQueueAssignedDate = document.getElementById('prevQueueAssignedDate').value.trim();
+    if (!prevQueueAssignedDate) { alert('Previous Queue assigned date is required.'); return; }
+    formData.prevQueueAssignedDate = prevQueueAssignedDate;
+
+    const latestAssignDate = document.getElementById('latestAssignDate').value.trim();
+    if (!latestAssignDate) { alert('Latest assignemnt date to Main queue is required.'); return; }
+    formData.latestAssignDate = latestAssignDate;
+
+    formData.agentFault = document.getElementById('agentFault').value;
+    if (!formData.agentFault) { alert('Select "Agent Fault".'); return; }
+  } else if (currentQueue === 'Reopen') {
+    formData.rootCauseType = document.getElementById('rootCauseType').value;
+    if (!formData.rootCauseType) { alert('Select Root Cause Type.'); return; }
+    formData.subcategory = document.getElementById('subcategory').value;
+    if (!formData.subcategory) { alert('Select Subcategory.'); return; }
+    if (document.getElementById('thirdDropdownRow').style.display !== 'none') {
+      formData.detail = document.getElementById('detailDropdown').value;
+      if (!formData.detail) { alert('Select Detail.'); return; }
+    }
+
+    if (document.getElementById('remarkRow').style.display !== 'none') {
+      const remarkElem = document.getElementById('rootCauseRemark');
+      formData.rootCauseRemark = remarkElem.value.trim();
+      
+      if (!formData.rootCauseRemark) { 
+        alert(formData.subcategory === 'HR Template Used' ? 'Please select an HR Template.' : 'Remark is required.'); 
+        return; 
+      }
+
+      const isOtherRemark = ['Other - see remark', 'UA Template Used'].includes(formData.subcategory) ||
+                            formData.detail === 'Other - see remark' ||
+                            formData.detail === 'Refund Dispute -others (details see remark)';
+      if (isOtherRemark && countWords(formData.rootCauseRemark) > 7) {
+        alert(`7 words exceeded, limited to 7 word only. (Currently entered: ${countWords(formData.rootCauseRemark)} words)`);
+        remarkElem.classList.add('input-invalid');
+        remarkElem.focus();
+        return;
+      }
+    }
+
+    formData.kbLink = document.getElementById('kbLink').value.trim();
+    if (!formData.kbLink) { alert('KB Link is required.'); return; }
+    formData.diagnosticRemarks = document.getElementById('diagRemarks').value.trim();
+    if (!formData.diagnosticRemarks) { alert('Diagnostic Remarks are required.'); return; }
+
+    const coachingInput = document.getElementById('coachingNote');
+    formData.coachingNote = coachingInput.value.trim();
+    if (hasDefectFound) {
+      if (!validateDefectCoaching(formData.coachingNote, `Coaching Note (Defect on Q: ${defectQuestionNumbers.join(', ')})`)) {
+        coachingInput.focus();
+        coachingInput.classList.remove('coaching-valid-alert');
+        coachingInput.classList.add('coaching-required-alert');
+        return;
+      }
+    } else {
+      if (!formData.coachingNote) { alert('Coaching Note is required.'); return; }
+    }
+  } else if (currentQueue === 'FCR') {
+    formData.fcrCategory = document.getElementById('fcrCategory').value;
+    if (!formData.fcrCategory) { alert('Select FCR Category.'); return; }
+    formData.fcrSubcategory = document.getElementById('fcrSubcategory').value;
+    if (!formData.fcrSubcategory) { alert('Select FCR Subcategory.'); return; }
+    if (document.getElementById('fcrAlternativeRow').style.display !== 'none') {
+      formData.fcrAlternativeSubReason = document.getElementById('fcrAlternativeSub').value;
+      if (!formData.fcrAlternativeSubReason) { alert('Select Alternative Sub Reason.'); return; }
+    }
+    if (document.getElementById('fcrRemarkRow').style.display !== 'none') {
+      const fcrRemarkElem = document.getElementById('fcrRemark');
+      formData.fcrRemark = fcrRemarkElem.value.trim();
+      if (!formData.fcrRemark) { alert('Remark is required for "Other - see remark".'); return; }
+      if (countWords(formData.fcrRemark) > 7) {
+        alert(`7 words exceeded, limited to 7 word only. (Currently entered: ${countWords(formData.fcrRemark)} words)`);
+        fcrRemarkElem.classList.add('input-invalid');
+        fcrRemarkElem.focus();
+        return;
+      }
+    }
+    formData.kbLink = document.getElementById('kbLink').value.trim();
+    if (!formData.kbLink) { alert('KB Link is required.'); return; }
+    formData.diagnosticRemarks = document.getElementById('diagRemarks').value.trim();
+    if (!formData.diagnosticRemarks) { alert('Diagnostic Remarks are required.'); return; }
+
+    const coachingInput = document.getElementById('coachingNote');
+    formData.coachingNote = coachingInput.value.trim();
+    if (hasDefectFound) {
+      if (!validateDefectCoaching(formData.coachingNote, `Coaching Note (Defect on Q: ${defectQuestionNumbers.join(', ')})`)) {
+        coachingInput.focus();
+        coachingInput.classList.remove('coaching-valid-alert');
+        coachingInput.classList.add('coaching-required-alert');
+        return;
+      }
+    } else {
+      if (!formData.coachingNote) { alert('Coaching Note is required.'); return; }
+    }
+  } else if (currentQueue.startsWith('SLA_')) {
+    formData.slaReason = document.getElementById('slaReason').value;
+    if (!formData.slaReason) { alert('Select SLA Reason.'); return; }
+    formData.agentFault = document.getElementById('agentFault').value;
+    if (!formData.agentFault) { alert('Select Agent Fault.'); return; }
+    formData.slaAdditionalNotes = document.getElementById('slaAdditionalNotes').value.trim();
+    if (!formData.slaAdditionalNotes) { alert('SLA Additional Notes are required.'); return; }
+    formData.diagnosticRemarks = document.getElementById('diagRemarks').value.trim();
+    if (!formData.diagnosticRemarks) { alert('Diagnostic Remarks are required.'); return; }
+  } else if (currentQueue === 'CSAT') {
+    formData.responseValue = document.getElementById('responseValue').value;
+    formData.surveySentDate = document.getElementById('surveySentDate').value;
+    formData.surveyCompletedDate = document.getElementById('surveyCompletedDate').value;
+    formData.errorType = document.getElementById('errorType').value;
+    if (!formData.errorType) { alert('Select Error Type.'); return; }
+    formData.csatAuditStatus = document.getElementById('csatAuditStatus').value;
+    if (!formData.csatAuditStatus) { alert('Select CSAT Audit Status (Valid/Invalid).'); return; }
+
+    if (formData.csatAuditStatus === 'Valid' || hasDefectFound) {
+      const csatCoachElem = document.getElementById('csatCoachingNote');
+      formData.coachingNote = csatCoachElem.value.trim();
+      if (!validateDefectCoaching(formData.coachingNote, `CSAT Coaching Note (Defect on Q: ${defectQuestionNumbers.join(', ')})`)) {
+        csatCoachElem.focus();
+        csatCoachElem.classList.remove('coaching-valid-alert');
+        csatCoachElem.classList.add('coaching-required-alert');
+        return;
+      }
+    } else {
+      formData.coachingNote = '';
+    }
+
+    let csatRemarks = document.getElementById('csatDiagRemarks');
+    formData.diagnosticRemarks = csatRemarks ? csatRemarks.value.trim() : '';
+    if (!formData.diagnosticRemarks) { alert('Diagnostic Remarks are required.'); return; }
+  } else if (currentQueue === 'General Audit') {
+    const coachingInput = document.getElementById('coachingDetails');
+    formData.coachingDetails = coachingInput.value.trim();
+
+    if (hasDefectFound) {
+      if (!validateDefectCoaching(formData.coachingDetails, `Coaching Details (Defect on Q: ${defectQuestionNumbers.join(', ')})`)) {
+        coachingInput.focus();
+        coachingInput.classList.remove('coaching-valid-alert');
+        coachingInput.classList.add('coaching-required-alert');
+        return;
+      }
+    } else {
+      if (!formData.coachingDetails) { alert('Coaching Details are required.'); return; }
+    }
+
+    formData.diagnosticRemarks = document.getElementById('diagRemarks').value.trim();
+    if (!formData.diagnosticRemarks) { alert('Diagnostic Remarks are required.'); return; }
+  } else if (currentQueue === 'BPO Coaching') {
+    formData.bpocDescription = document.getElementById('bpocDescription').value;
+    formData.bpocHandling = document.getElementById('bpocHandling').value;
+    formData.bpocJira = document.getElementById('bpocJira').value;
+    formData.bpocKB = document.getElementById('bpocKB').value;
+    formData.bpocIssues = document.getElementById('bpocIssues').value;
+    formData.escalationValidity = document.getElementById('escalationValidity').value;
+    if (!formData.escalationValidity) { alert('Select Escalation Validity.'); return; }
+    if (formData.escalationValidity === 'INVALID') {
+      formData.challengingNote = document.getElementById('challengingNote').value.trim();
+      if (!formData.challengingNote) { alert('Challenging Note is required when INVALID.'); return; }
+    } else {
+      formData.challengingNote = '';
+    }
+
+    const auditorNoteElem = document.getElementById('auditorNote');
+    formData.auditorNote = auditorNoteElem.value.trim();
+    if (hasDefectFound) {
+      if (!validateDefectCoaching(formData.auditorNote, `Auditor Note (Defect on Q: ${defectQuestionNumbers.join(', ')})`)) {
+        auditorNoteElem.focus();
+        auditorNoteElem.classList.remove('coaching-valid-alert');
+        auditorNoteElem.classList.add('coaching-required-alert');
+        return;
+      }
+    } else {
+      if (!formData.auditorNote) { alert('Auditor Note is required.'); return; }
+    }
+
+    formData.additionalComment = document.getElementById('additionalComment').value.trim();
+    if (!formData.additionalComment) { alert('Additional Comment is required.'); return; }
+    formData.diagnosticRemarks = document.getElementById('diagRemarks').value.trim();
+    if (!formData.diagnosticRemarks) { alert('Diagnostic Remarks are required.'); return; }
+  }
+
+  google.script.run.withSuccessHandler(function(res) {
+    document.getElementById('submitMsg').innerHTML = `<div class="alert alert-success py-1 font-weight-bold small">Data Submitted Successfully!</div>`;
+    clearCaseFields();
+    document.getElementById('fetchStatus').innerText = '';
+    currentQueue = '';
+    auditStartTime = null;
+    onQueueChange();
+    google.script.run.withSuccessHandler(updateStats).getUserStats();
+  }).withFailureHandler(function(err) {
+    document.getElementById('submitMsg').innerHTML = `<div class="alert alert-danger py-1 font-weight-bold small">Error: ${err.message}</div>`;
+  }).submitAudit(formData);
+}
+</script>
+</body>
+</html>

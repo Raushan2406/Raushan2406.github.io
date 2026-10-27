@@ -1,0 +1,930 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script>window.DEMO={"mail": false, "links": [{"label": "Open QA view \u2192", "href": "demo-seating-qa.html"}], "intro": "Admin view. Seats are auto-allocated so neighbours never share a LOB. Change a seat to create a conflict, then Save to publish to the QA view.", "back": "index.html#work"};</script>
+<script src="lib/demo-data.js"></script>
+<script src="lib/gas-emu.js"></script>
+<script>
+(function(){
+var D=DEMODATA, R=D.rng(9);
+var lobs=['WFS Disputes','WFS Disputes','Core Chat','SFF Disputes','SIM Chat','MPCX Content','Inventory Management','WFS Customer','Strikethrough'];
+var names=D.agents(44,77);
+var rows=[['ACT ID','Name','Salesforce Name','Designation','Email','LOB','Manager','Work Location','Level','Shift (IST)','Status','Office Location']];
+names.forEach(function(n,i){var night=i%5>=3; rows.push(['ACT'+(2000+i),n,n,'QA',n.toLowerCase().replace(/\s+/g,'.')+'@demo-qa.com',lobs[Math.floor(R()*lobs.length)],'QA Lead','Gurugram','L1',night?'19:00 - 04:00':(R()<.5?'09:00 - 18:00':'10:00 - 19:00'),'Active','Gurugram - 8th Floor']);});
+// two remote QAs (filtered out by the planner: not in the Gurugram office)
+rows.push(['ACT2990','Tara Kulkarni','Tara Kulkarni','QA','','WFS Disputes','QA Lead','Bhopal','L1','09:00 - 18:00','Active','Bhopal']);
+DEMO.seatNames={dayFixed:{'E2-02':names[0],'E1-01':names[1],'E1-02':names[2]},nightFixed:{'E2-02':names[3],'E2-03':names[4],'E2-04':names[8]}};
+// make fixed day QAs day shift and fixed night QAs night shift
+[[0,'Core Chat'],[1,'SIM Chat'],[2,'MPCX Content']].forEach(function(x){rows[x[0]+1][9]='09:00 - 18:00';rows[x[0]+1][5]=x[1];});[[3,'Strikethrough'],[4,'SFF Disputes'],[8,'Core Chat']].forEach(function(x){rows[x[0]+1][9]='19:00 - 04:00';rows[x[0]+1][5]=x[1];});
+DEMO.book('ACTIVE',{Roster:rows});
+})();
+
+</script>
+<script>
+DEMO.init=function(){
+  var S=DEMO.server, orig=S.saveManualAllocation;
+  S.saveManualAllocation=function(d){ var r=orig(d); try{ localStorage.setItem('demoSeatPlan', JSON.stringify(DEMO.sheetRows('ACTIVE','QA_Seating_Allocation'))); }catch(e){} return r; };
+};
+</script>
+<script>
+DEMO.server=(function(){
+/**
+ * QA Seating Engine: 2-Tier Architecture (Admin Edit View + QA Read-Only View)
+ * Fixed: Robust whitelist rules ensuring 0 conflicts and proper count parsing
+ */
+
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu('💺 QA Seating')
+    .addItem('👑 Open Admin View (Editable)', 'showAdminDashboard')
+    .addItem('👥 Open QA View (Read-Only)', 'showQAView')
+    .addSeparator()
+    .addItem('Run Auto-Allocation to Sheet', 'runAndWriteAllocation')
+    .addToUi();
+}
+
+function doGet(e) {
+  const view = (e && e.parameter && e.parameter.view) ? e.parameter.view.toLowerCase() : 'qa';
+  const file = (view === 'admin') ? 'AdminDashboard' : 'QAView';
+  return HtmlService.createHtmlOutputFromFile(file)
+    .setTitle(view === 'admin' ? 'QA Seating - Admin Editor' : 'QA Workstation Floor Map')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+function showAdminDashboard() {
+  const webAppUrl = "#"; 
+  const adminUrl = webAppUrl + (webAppUrl.includes('?') ? '&' : '?') + 'view=admin';
+
+  const html = HtmlService.createHtmlOutput(
+    `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; text-align:center; padding: 25px 20px;">
+       <h3 style="margin-top:0; color:#0f172a;">👑 Admin Seating Dashboard</h3>
+       <p style="color:#64748b; font-size:13px; margin-bottom:20px;">
+         Open the full-screen interactive dashboard in a dedicated browser tab:
+       </p>
+       <a href="${adminUrl}" target="_blank" 
+          style="background:#2563eb; color:#ffffff; padding:10px 20px; text-decoration:none; border-radius:6px; font-weight:700; font-size:13px; display:inline-block;">
+         Open Full-Screen Admin Dashboard ↗
+       </a>
+     </div>`
+  ).setWidth(420).setHeight(190);
+
+  SpreadsheetApp.getUi().showModalDialog(html, '👑 Admin Dashboard');
+}
+
+function showQAView() {
+  const html = HtmlService.createHtmlOutputFromFile('QAView')
+    .setWidth(1350)
+    .setHeight(880)
+    .setTitle('🏢 QA Seating Floor Map');
+  SpreadsheetApp.getUi().showModalDialog(html, '🏢 QA Seating Floor Map');
+}
+
+function getSeatPool() {
+  return [
+    "E2-01", "E2-02", "E2-03", "E2-04",
+    "E1-01", "E1-02", "E1-03", "E1-04", "E1-05", "E1-06", "E1-07",
+    "D8-01", "D8-02", "D8-03", "D8-04", "D8-05", "D8-06", "D8-07", "D8-08",
+    "D7-01", "D7-02", "D7-03", "D7-04", "D7-05", "D7-06", "D7-07", "D7-08", "D7-09"
+  ];
+}
+
+function classifyShiftFromIST(shiftIst) {
+  const text = String(shiftIst || '').toLowerCase().replace(/\s+/g, '');
+  
+  // 1. Explicit Day Shifts (09:00 to 18:00, 10:00 to 19:00, or any shift starting in the morning)
+  if (text.startsWith("09:00") || text.startsWith("10:00") || text.startsWith("08:00") || 
+      text.includes("09:00-18:00") || text.includes("10:00-19:00") || text.includes("day")) {
+    return 'Day';
+  }
+  
+  // 2. Explicit Night Shifts (Starting at 19:00, ending at 04:00/05:00, or night tags)
+  if (text.startsWith("19:00") || text.includes("19:00-04:00") || text.includes("04:00") || 
+      text.includes("night") || text.includes("graveyard")) {
+    return 'Night';
+  }
+  
+  // Fallback check on starting hour
+  const match = text.match(/^(\d{1,2}):/);
+  if (match) {
+    const startHour = parseInt(match[1], 10);
+    if (startHour >= 18 || startHour < 6) return 'Night';
+    return 'Day';
+  }
+  
+  return 'Day';
+}
+
+function normalizeName(str) {
+  return String(str || '').toLowerCase().replace(/[^a-z]/g, '');
+}
+
+function normalizeLob(str) {
+  return String(str || '').toLowerCase().replace(/[^a-z]/g, '');
+}
+
+function isWfsLob(lob) {
+  const l = normalizeLob(lob);
+  return l.includes('wfsdispute');
+}
+
+function isValidQAName(name) {
+  if (!name) return false;
+  const n = String(name).trim().toUpperCase();
+  return n !== '' && n !== '-' && n !== 'VACANT' && n !== 'QA TL' && !n.includes('OT RESERVED');
+}
+
+/**
+ * Neighbor conflict validator with whitelists
+ */
+function checkNeighborConflict(allocation, seatPool, idx, isDay) {
+  const current = allocation[idx];
+  if (!current || current.isOT || !current.lob || current.lob === 'Vacant' || !isValidQAName(current.name)) return false;
+
+  const currentSeat = seatPool[idx];
+
+  // Whitelist Day intentional pairs
+  if (isDay && (currentSeat === "E1-01" || currentSeat === "E1-02" || currentSeat === "E2-02" || currentSeat === "E2-03")) return false;
+
+  // Whitelist Night intentional pairs
+  if (!isDay && (currentSeat === "E2-02" || currentSeat === "E2-03" || currentSeat === "E2-04")) return false;
+
+  const left = idx > 0 ? allocation[idx - 1] : null;
+  const right = idx < allocation.length - 1 ? allocation[idx + 1] : null;
+
+  const curLob = normalizeLob(current.lob);
+
+  const leftConflict = left && !left.isOT && isValidQAName(left.name) && normalizeLob(left.lob) === curLob &&
+    !(isDay && seatPool[idx - 1] === "E1-01" && currentSeat === "E1-02") &&
+    !(isDay && seatPool[idx - 1] === "E2-02" && currentSeat === "E2-03") &&
+    !(!isDay && seatPool[idx - 1] === "E2-02" && currentSeat === "E2-03") &&
+    !(!isDay && seatPool[idx - 1] === "E2-03" && currentSeat === "E2-04");
+
+  const rightConflict = right && !right.isOT && isValidQAName(right.name) && normalizeLob(right.lob) === curLob &&
+    !(isDay && currentSeat === "E1-01" && seatPool[idx + 1] === "E1-02") &&
+    !(isDay && currentSeat === "E2-02" && seatPool[idx + 1] === "E2-03") &&
+    !(!isDay && currentSeat === "E2-02" && seatPool[idx + 1] === "E2-03") &&
+    !(!isDay && currentSeat === "E2-03" && seatPool[idx + 1] === "E2-04");
+
+  return Boolean(leftConflict || rightConflict);
+}
+
+function getPublishedFloorPlan() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName("QA_Seating_Allocation");
+  const seatPool = getSeatPool();
+
+  if (!sheet || sheet.getLastRow() < 2) {
+    return getDashboardData();
+  }
+
+  const values = sheet.getDataRange().getValues();
+  const dayAlloc = new Array(seatPool.length).fill(null);
+  const nightAlloc = new Array(seatPool.length).fill(null);
+
+  for (let r = 1; r < values.length; r++) {
+    const row = values[r];
+    const seatId = String(row[0] || '').trim();
+    const idx = seatPool.indexOf(seatId);
+    if (idx === -1) continue;
+
+    const dayName = String(row[3] || '').trim();
+    const dayLob = String(row[4] || '').trim();
+    const dayShift = String(row[5] || '').trim();
+
+    const nightName = String(row[7] || '').trim();
+    const nightLob = String(row[8] || '').trim();
+    const nightShift = String(row[9] || '').trim();
+
+    if (isValidQAName(dayName) || dayName === 'QA TL') {
+      dayAlloc[idx] = { actId: String(row[2] || ''), name: dayName, lob: dayLob, shiftInfo: dayShift };
+    }
+
+    if (nightName.includes('OT RESERVED')) {
+      nightAlloc[idx] = { actId: "OT-RESERVED", name: "OT Reserved Desk", lob: "OT Row", shiftInfo: "Available for OT", isOT: true };
+    } else if (isValidQAName(nightName) || nightName === 'QA TL') {
+      nightAlloc[idx] = { actId: String(row[6] || ''), name: nightName, lob: nightLob, shiftInfo: nightShift, isOT: false };
+    }
+  }
+
+  const desks = seatPool.map((seatId, i) => {
+    const bay = seatId.split("-")[0];
+    const dQA = dayAlloc[i] || null;
+    const nQA = nightAlloc[i] || null;
+    const isOT = Boolean(nQA && nQA.isOT);
+
+    return {
+      seatId: seatId,
+      bay: bay,
+      isOT: isOT,
+      dayQA: dQA,
+      nightQA: nQA,
+      dayConflict: checkNeighborConflict(dayAlloc, seatPool, i, true),
+      nightConflict: checkNeighborConflict(nightAlloc, seatPool, i, false)
+    };
+  });
+
+  let totalConflicts = 0;
+  let otCount = 0;
+  desks.forEach(d => {
+    if (d.isOT) otCount++;
+    if (!d.isOT && (d.dayConflict || d.nightConflict)) totalConflicts++;
+  });
+
+  return {
+    success: true,
+    totalDesks: seatPool.length,
+    otDesksCount: otCount,
+    dayCount: dayAlloc.filter(d => d && isValidQAName(d.name)).length,
+    nightCount: nightAlloc.filter(d => d && !d.isOT && isValidQAName(d.name)).length,
+    conflictsCount: totalConflicts,
+    desks: desks
+  };
+}
+
+function getDashboardData() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sourceSheet = ss.getActiveSheet();
+  const data = sourceSheet.getDataRange().getValues();
+
+  if (data.length < 2) {
+    return { success: false, message: "No data found in sheet." };
+  }
+
+  const headers = data[0].map(h => String(h).trim().toLowerCase());
+
+  let colSalesforce = headers.findIndex(h => h.includes("salesforce"));
+  let colName = headers.indexOf("name");
+  let colActId = headers.indexOf("act id");
+  let colLob = headers.indexOf("lob");
+  let colWorkLoc = headers.indexOf("work location");
+  let colShiftIst = headers.findIndex(h => h.includes("shift (ist)") || h === "shift (ist)");
+  let colOfficeLoc = headers.findIndex(h => h.includes("office location") || h.includes("office"));
+
+  if (colActId === -1) colActId = 0;
+  if (colName === -1) colName = 1;
+  if (colSalesforce === -1) colSalesforce = 2;
+  if (colLob === -1) colLob = 5;
+  if (colWorkLoc === -1) colWorkLoc = 7;
+  if (colShiftIst === -1) colShiftIst = 9;
+  if (colOfficeLoc === -1) colOfficeLoc = 22;
+
+  const dayQAs = [];
+  const nightQAs = [];
+
+  for (let r = 1; r < data.length; r++) {
+    const row = data[r];
+    const officeVal = colOfficeLoc < row.length ? String(row[colOfficeLoc] || "").toLowerCase().trim() : "";
+    const workLocVal = colWorkLoc < row.length ? String(row[colWorkLoc] || "").toLowerCase().trim() : "";
+    const combinedLoc = `${officeVal} ${workLocVal}`;
+
+    if (combinedLoc.includes("bhopal")) continue;
+
+    const isGurugram = combinedLoc.includes("gurugram") || combinedLoc.includes("gurgaon") || combinedLoc.includes("aihp") || combinedLoc.includes("millenium") || combinedLoc.includes("8th floor");
+    if (!isGurugram) continue;
+
+    const sfName = String(row[colSalesforce] || "").trim();
+    const regularName = String(row[colName] || "").trim();
+    const activeName = sfName || regularName;
+    if (!activeName) continue;
+
+    const actId = String(row[colActId] || `ID-${r}`).trim();
+    const lob = String(row[colLob] || "General").trim();
+    const shiftIstValue = String(row[colShiftIst] || "").trim();
+    const shiftType = classifyShiftFromIST(shiftIstValue);
+
+    const qaObj = {
+      actId: actId,
+      name: activeName,
+      lob: lob,
+      designation: "QA",
+      shiftInfo: shiftIstValue || (shiftType === 'Night' ? "19:00 - 04:00" : "09:00 - 18:00"),
+      workLocation: "Gurugram"
+    };
+
+    if (shiftType === 'Night') nightQAs.push(qaObj);
+    else dayQAs.push(qaObj);
+  }
+
+  const seatPool = getSeatPool();
+  const dayFixed = DEMO.seatNames.dayFixed;
+  const nightFixed = DEMO.seatNames.nightFixed;
+
+  const dayAlloc = allocateLinearRoster(dayQAs, seatPool, dayFixed, 'Day');
+  const nightAlloc = allocateLinearRoster(nightQAs, seatPool, nightFixed, 'Night');
+
+  let otCount = 0;
+  for (let i = 0; i < seatPool.length; i++) {
+    if (seatPool[i].startsWith("D7-") && nightAlloc[i] && nightAlloc[i].isOT) otCount++;
+  }
+
+  const desks = seatPool.map((seatId, i) => {
+    const bay = seatId.split("-")[0];
+    const dQA = dayAlloc[i] || null;
+    const nQA = nightAlloc[i] || null;
+    const isOT = Boolean(nQA && nQA.isOT);
+
+    return {
+      seatId: seatId,
+      bay: bay,
+      isOT: isOT,
+      dayQA: dQA,
+      nightQA: nQA,
+      dayConflict: checkNeighborConflict(dayAlloc, seatPool, i, true),
+      nightConflict: checkNeighborConflict(nightAlloc, seatPool, i, false)
+    };
+  });
+
+  let totalConflicts = 0;
+  desks.forEach(d => {
+    if (!d.isOT && (d.dayConflict || d.nightConflict)) totalConflicts++;
+  });
+
+  return {
+    success: true,
+    totalDesks: seatPool.length,
+    otDesksCount: otCount,
+    dayCount: dayAlloc.filter(d => d && !d.isOT && isValidQAName(d.name)).length,
+    nightCount: nightAlloc.filter(d => d && !d.isOT && isValidQAName(d.name)).length,
+    conflictsCount: totalConflicts,
+    desks: desks,
+    allDayQAs: dayQAs,
+    allNightQAs: nightQAs
+  };
+}
+
+function allocateLinearRoster(qas, seatPool, fixedAssignments, shiftType) {
+  const totalSeats = seatPool.length;
+  const allocation = new Array(totalSeats).fill(null);
+  const remainingQAs = [...qas];
+  const isDay = (shiftType === 'Day');
+
+  allocation[0] = {
+    actId: "TL-LEAD",
+    name: "QA TL",
+    lob: "QA Leadership",
+    designation: "Team Lead",
+    shiftInfo: isDay ? "09:00 - 18:00" : "19:00 - 04:00",
+    workLocation: "Gurugram"
+  };
+
+  for (let i = 0; i < totalSeats; i++) {
+    const seatId = seatPool[i];
+    if (fixedAssignments[seatId]) {
+      const targetNameNorm = normalizeName(fixedAssignments[seatId]);
+      const matchIndex = remainingQAs.findIndex(q => {
+        const qNameNorm = normalizeName(q.name);
+        return qNameNorm.includes(targetNameNorm) || targetNameNorm.includes(qNameNorm);
+      });
+      if (matchIndex !== -1) {
+        allocation[i] = remainingQAs.splice(matchIndex, 1)[0];
+      }
+    }
+  }
+
+  const wfsList = [];
+  const otherList = [];
+  remainingQAs.forEach(q => {
+    if (isWfsLob(q.lob)) wfsList.push(q);
+    else otherList.push(q);
+  });
+
+  const otherGroups = {};
+  otherList.forEach(q => {
+    const key = q.lob || 'General';
+    if (!otherGroups[key]) otherGroups[key] = [];
+    otherGroups[key].push(q);
+  });
+
+  const otherKeys = Object.keys(otherGroups);
+  const sortedOthers = [];
+  let round = 0;
+  let added = true;
+  while (added) {
+    added = false;
+    otherKeys.forEach(k => {
+      if (round < otherGroups[k].length) {
+        sortedOthers.push(otherGroups[k][round]);
+        added = true;
+      }
+    });
+    round++;
+  }
+
+  const interleaved = [];
+  let wIdx = 0, oIdx = 0;
+  while (wIdx < wfsList.length || oIdx < sortedOthers.length) {
+    if (wIdx < wfsList.length) interleaved.push(wfsList[wIdx++]);
+    if (oIdx < sortedOthers.length) interleaved.push(sortedOthers[oIdx++]);
+  }
+
+  let ptr = 0;
+  for (let i = 1; i < totalSeats; i++) {
+    if (allocation[i] === null && ptr < interleaved.length) {
+      allocation[i] = interleaved[ptr++];
+    }
+  }
+
+  for (let i = 0; i < totalSeats; i++) {
+    if (allocation[i] === null && seatPool[i].startsWith("D7-")) {
+      allocation[i] = {
+        actId: "OT-RESERVED",
+        name: "OT Reserved Desk",
+        lob: "OT Row",
+        designation: "Overtime Station",
+        shiftInfo: "Available for OT",
+        workLocation: "Gurugram",
+        isOT: true
+      };
+    }
+  }
+
+  return allocation;
+}
+
+function saveManualAllocation(desksData) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let sheet = ss.getSheetByName("QA_Seating_Allocation");
+    if (!sheet) {
+      sheet = ss.insertSheet("QA_Seating_Allocation");
+    } else {
+      sheet.clear();
+    }
+
+    const rows = [
+      [
+        "Seat ID", "Bay",
+        "Day Shift ACT ID", "Day Shift Salesforce Name", "Day LOB", "Day Shift (IST)",
+        "Night Shift ACT ID", "Night Shift Salesforce Name", "Night LOB", "Night Shift (IST)",
+        "Day Conflict Status", "Night Conflict Status"
+      ]
+    ];
+
+    desksData.forEach(d => {
+      rows.push([
+        d.seatId,
+        `Bay ${d.bay}`,
+        d.dayQA ? (d.dayQA.actId || "-") : "-",
+        (d.dayQA && isValidQAName(d.dayQA.name)) ? d.dayQA.name : (d.seatId === "E2-01" ? "QA TL" : "VACANT"),
+        d.dayQA ? d.dayQA.lob : "-",
+        d.dayQA ? (d.dayQA.shiftInfo || "-") : "-",
+        d.nightQA ? (d.nightQA.actId || "-") : "-",
+        d.nightQA ? (d.isOT ? "OT RESERVED DESK" : ((isValidQAName(d.nightQA.name) || d.seatId === "E2-01") ? d.nightQA.name : "VACANT")) : "VACANT",
+        d.nightQA ? (d.isOT ? "OT Row" : d.nightQA.lob) : "-",
+        d.nightQA ? (d.nightQA.shiftInfo || "-") : "-",
+        d.dayConflict ? "⚠️ Adjacent LOB Match" : (d.dayQA && isValidQAName(d.dayQA.name) ? "✅ Clear" : "Vacant"),
+        d.nightConflict ? "⚠️ Adjacent LOB Match" : (d.nightQA && isValidQAName(d.nightQA.name) ? "✅ Clear" : (d.isOT ? "⚡ OT Reserved" : "Vacant"))
+      ]);
+    });
+
+    sheet.getRange(1, 1, rows.length, rows[0].length).setValues(rows);
+    sheet.getRange(1, 1, 1, rows[0].length)
+      .setBackground("#1F4E79")
+      .setFontColor("#FFFFFF")
+      .setFontWeight("bold")
+      .setHorizontalAlignment("center");
+    sheet.setFrozenRows(1);
+    sheet.autoResizeColumns(1, rows[0].length);
+
+    return { success: true, message: "Floor plan published! 0 conflicts across views." };
+  } catch (err) {
+    return { success: false, message: err.message };
+  }
+}
+
+function runAndWriteAllocation() {
+  const res = getDashboardData();
+  if (res.success) {
+    saveManualAllocation(res.desks);
+    SpreadsheetApp.getUi().alert("Seating written and published to 'QA_Seating_Allocation'!");
+  }
+}
+;return {allocateLinearRoster:allocateLinearRoster,checkNeighborConflict:checkNeighborConflict,classifyShiftFromIST:classifyShiftFromIST,doGet:doGet,getDashboardData:getDashboardData,getPublishedFloorPlan:getPublishedFloorPlan,getSeatPool:getSeatPool,isValidQAName:isValidQAName,isWfsLob:isWfsLob,normalizeLob:normalizeLob,normalizeName:normalizeName,onOpen:onOpen,runAndWriteAllocation:runAndWriteAllocation,saveManualAllocation:saveManualAllocation,showAdminDashboard:showAdminDashboard,showQAView:showQAView};
+})();
+if(DEMO.init) DEMO.init();
+</script>
+
+  
+  <meta charset="utf-8">
+  <title>QA Seating - Admin Dashboard</title>
+  <style>
+    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
+    body { margin: 0; padding: 16px 20px; background-color: #f8fafc; color: #0f172a; }
+    .top-bar { display: flex; justify-content: space-between; align-items: center; background: #ffffff; padding: 14px 20px; border-radius: 8px; border: 1px solid #e2e8f0; margin-bottom: 16px; }
+    .top-bar h1 { margin: 0; font-size: 20px; font-weight: 800; color: #0f172a; }
+    .top-buttons { display: flex; gap: 10px; }
+    .btn { padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 700; border: none; }
+    .btn-sync { background: #2563eb; color: #ffffff; }
+    .btn-save { background: #16a34a; color: #ffffff; box-shadow: 0 2px 4px rgba(22,163,74,0.2); }
+    .stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px; }
+    .stat-box { background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px 16px; position: relative; }
+    .stat-box::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; border-radius: 8px 0 0 8px; }
+    .stat-box.desks::before { background: #3b82f6; }
+    .stat-box.ot::before { background: #9333ea; }
+    .stat-box.day::before { background: #f59e0b; }
+    .stat-box.night::before { background: #8b5cf6; }
+    .stat-box.conflicts::before { background: #ef4444; }
+    .stat-label { font-size: 11px; text-transform: uppercase; color: #64748b; font-weight: 700; letter-spacing: 0.5px; }
+    .stat-val { font-size: 22px; font-weight: 800; color: #0f172a; margin-top: 4px; }
+    .filter-bar { display: flex; gap: 10px; align-items: center; margin-bottom: 18px; flex-wrap: wrap; background-color: #ffffff; padding: 10px 14px; border: 1px solid #e2e8f0; border-radius: 8px; }
+    .btn-filter-group { display: flex; background: #e2e8f0; padding: 2px; border-radius: 6px; }
+    .btn-filter { background-color: transparent; border: none; padding: 6px 12px; border-radius: 5px; cursor: pointer; font-size: 12px; font-weight: 700; color: #64748b; }
+    .btn-filter.active { background-color: #ffffff; color: #0f172a; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+    input[type="text"], select { padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 12px; background-color: #ffffff; outline: none; }
+    .bay-block { border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px; margin-bottom: 18px; background-color: #ffffff; }
+    .bay-block.ot-bay { border: 2px dashed #a855f7; background-color: #faf5ff; }
+    .bay-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #f1f5f9; padding-bottom: 8px; margin-bottom: 12px; font-weight: 800; font-size: 15px; color: #0f172a; }
+    .desk-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+    .desk-card { border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px; background-color: #ffffff; box-shadow: 0 1px 2px rgba(0,0,0,0.03); }
+    .desk-card.conflict { border: 1.5px solid #ef4444; background-color: #fef2f2; }
+    .desk-card.lead-desk { border: 1.5px solid #eab308; background-color: #fefce8; }
+    .desk-title { font-size: 12px; font-weight: 800; margin-bottom: 8px; display: flex; justify-content: space-between; color: #334155; }
+    .desk-status-badge { font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px; }
+    .desk-status-badge.safe { background: #dcfce7; color: #15803d; }
+    .desk-status-badge.alert { background: #fee2e2; color: #b91c1c; }
+    .desk-status-badge.lead { background: #fef08a; color: #854d0e; }
+    .desk-status-badge.ot { background: #f3e8ff; color: #7e22ce; border: 1px solid #d8b4fe; }
+    .shift-slot { border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; background: #fafafa; }
+    .shift-slot:last-of-type { margin-bottom: 0; }
+    .shift-meta { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+    .shift-indicator { font-size: 9px; font-weight: 800; text-transform: uppercase; }
+    .shift-indicator.day { color: #d97706; }
+    .shift-indicator.night { color: #7c3aed; }
+    .shift-indicator.lead { color: #854d0e; }
+    .shift-indicator.ot { color: #9333ea; }
+    .desk-dropdown-group { display: flex; flex-direction: column; gap: 5px; }
+    .dropdown-row { display: flex; align-items: center; gap: 6px; }
+    .dropdown-row label { font-size: 10px; font-weight: 700; color: #64748b; width: 28px; }
+    .desk-select { flex: 1; padding: 4px 6px; font-size: 11px; border-radius: 4px; border: 1px solid #cbd5e1; background: #ffffff; }
+    .lob-pill { font-size: 9px; font-weight: 800; padding: 2px 6px; border-radius: 4px; text-transform: uppercase; display: inline-block; white-space: nowrap; }
+    .lob-wfsdisputes { background-color: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; }
+    .lob-corechat { background-color: #fef3c7; color: #b45309; border: 1px solid #fde68a; }
+    .lob-sffdisputes { background-color: #fce7f3; color: #be185d; border: 1px solid #fbcfe8; }
+    .lob-simchat { background-color: #ede9fe; color: #6d28d9; border: 1px solid #ddd6fe; }
+    .lob-mpcxcontent { background-color: #ffedd5; color: #c2410c; border: 1px solid #fed7aa; }
+    .lob-inventorymanag { background-color: #dcfce7; color: #15803d; border: 1px solid #bbf7d0; }
+    .lob-wfscustomer { background-color: #ccfbf1; color: #0f766e; border: 1px solid #99f6e4; }
+    .lob-strikethrough { background-color: #e0e7ff; color: #4338ca; border: 1px solid #c7d2fe; }
+    .lob-qaleadership { background-color: #fef08a; color: #854d0e; border: 1px solid #fde047; }
+    .lob-otrow { background-color: #f3e8ff; color: #7e22ce; border: 1px solid #d8b4fe; }
+    .lob-default { background-color: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; }
+  </style>
+</head>
+<body>
+  <div class="top-bar">
+    <h1>👑 QA Seating & Hot-Desk Floor Map (Admin View)</h1>
+    <div class="top-buttons">
+      <button class="btn btn-save" onclick="saveToSheet()">💾 Save Manual Seating to Sheet</button>
+      <button class="btn btn-sync" onclick="loadData()">🔄 Reset / Auto-Allocate</button>
+    </div>
+  </div>
+
+  <div class="stats-row">
+    <div class="stat-box desks"><div class="stat-label">Total Workstations</div><div class="stat-val" id="valDesks">28</div></div>
+    <div class="stat-box ot"><div class="stat-label">⚡ OT Ready Desks (D7)</div><div class="stat-val" id="valOT">0 Desks</div></div>
+    <div class="stat-box day"><div class="stat-label">Day Shift (09-18)</div><div class="stat-val" id="valDay">0</div></div>
+    <div class="stat-box night"><div class="stat-label">Night Shift (19-04)</div><div class="stat-val" id="valNight">0</div></div>
+    <div class="stat-box conflicts"><div class="stat-label">Adjacency Conflicts</div><div class="stat-val" id="valConflicts">0</div></div>
+  </div>
+
+  <div class="filter-bar">
+    <div class="btn-filter-group">
+      <button class="btn-filter active" onclick="setShift('combined', this)">Combined 24H</button>
+      <button class="btn-filter" onclick="setShift('day', this)">☀️ Day Shift</button>
+      <button class="btn-filter" onclick="setShift('night', this)">🌙 Night Shift</button>
+    </div>
+    <input type="text" id="searchInput" placeholder="Search QA Name or Seat ID..." oninput="renderFloor()">
+    <select id="lobFilter" onchange="renderFloor()"><option value="">All LOBs</option></select>
+    <select id="bayFilter" onchange="renderFloor()">
+      <option value="">All Bays</option>
+      <option value="E2">Bay E2 (4)</option>
+      <option value="E1">Bay E1 (7)</option>
+      <option value="D8">Bay D8 (8)</option>
+      <option value="D7">Bay D7 (9)</option>
+    </select>
+  </div>
+
+  <div id="loader" style="padding: 20px; font-size: 13px; color: #64748b;">Loading admin workstation roster...</div>
+  <div id="baysContainer" style="display:none;"></div>
+
+  <script>
+    let globalDesks = [];
+    let allDayQAs = [];
+    let allNightQAs = [];
+    let currentShift = 'combined';
+
+    window.onload = function() { loadData(); };
+
+    function loadData() {
+      document.getElementById('loader').style.display = 'block';
+      document.getElementById('baysContainer').style.display = 'none';
+
+      google.script.run
+        .withSuccessHandler(renderData)
+        .withFailureHandler(err => { document.getElementById('loader').innerText = 'Error: ' + err.message; })
+        .getDashboardData();
+    }
+
+    function renderData(data) {
+      if (!data.success) {
+        document.getElementById('loader').innerText = data.message;
+        return;
+      }
+      globalDesks = data.desks;
+      allDayQAs = data.allDayQAs || [];
+      allNightQAs = data.allNightQAs || [];
+
+      document.getElementById('valDesks').innerText = data.totalDesks;
+      document.getElementById('valOT').innerText = `${data.otDesksCount} Desks`;
+      document.getElementById('valDay').innerText = data.dayCount;
+      document.getElementById('valNight').innerText = data.nightCount;
+
+      populateLobFilter(globalDesks);
+      recalculateConflicts();
+
+      document.getElementById('loader').style.display = 'none';
+      document.getElementById('baysContainer').style.display = 'block';
+      renderFloor();
+    }
+
+    function populateLobFilter(desks) {
+      const select = document.getElementById('lobFilter');
+      const currentVal = select.value;
+      const lobs = new Set();
+      desks.forEach(d => {
+        if (d.dayQA && d.dayQA.lob && d.dayQA.lob !== 'General' && d.dayQA.lob !== 'OT Row') lobs.add(d.dayQA.lob.trim());
+        if (d.nightQA && d.nightQA.lob && d.nightQA.lob !== 'General' && d.nightQA.lob !== 'OT Row') lobs.add(d.nightQA.lob.trim());
+      });
+      select.innerHTML = '<option value="">All LOBs</option>';
+      Array.from(lobs).sort().forEach(lob => {
+        const opt = document.createElement('option');
+        opt.value = lob;
+        opt.innerText = lob;
+        if (lob === currentVal) opt.selected = true;
+        select.appendChild(opt);
+      });
+    }
+
+    function setShift(shift, btn) {
+      currentShift = shift;
+      document.querySelectorAll('.btn-filter').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      renderFloor();
+    }
+
+    function getLobClass(lob) {
+      if (!lob) return 'lob-default';
+      const clean = lob.toLowerCase().replace(/[^a-z]/g, '');
+      if (clean.includes('otrow') || clean.includes('overtime')) return 'lob-otrow';
+      if (clean.includes('leadership') || clean.includes('lead')) return 'lob-qaleadership';
+      if (clean.includes('wfsdisputes')) return 'lob-wfsdisputes';
+      if (clean.includes('corechat')) return 'lob-corechat';
+      if (clean.includes('sffdisputes')) return 'lob-sffdisputes';
+      if (clean.includes('simchat')) return 'lob-simchat';
+      if (clean.includes('mpcx')) return 'lob-mpcxcontent';
+      if (clean.includes('inventory')) return 'lob-inventorymanag';
+      if (clean.includes('wfscustomer')) return 'lob-wfscustomer';
+      if (clean.includes('strikethrough')) return 'lob-strikethrough';
+      return 'lob-default';
+    }
+
+    function getAllLobsForShift(shift) {
+      const roster = (shift === 'day') ? allDayQAs : allNightQAs;
+      const s = new Set();
+      roster.forEach(q => { if (q.lob) s.add(q.lob.trim()); });
+      return Array.from(s).sort();
+    }
+
+    function recalculateConflicts() {
+      let conflictCount = 0;
+      for (let i = 0; i < globalDesks.length; i++) {
+        const d = globalDesks[i];
+        const seatId = d.seatId;
+
+        let dayConf = false;
+        if (d.dayQA && d.dayQA.lob && d.dayQA.lob !== 'Vacant' && !d.dayQA.isOT) {
+          const curLob = d.dayQA.lob.toLowerCase().trim();
+          const left = i > 0 ? globalDesks[i - 1] : null;
+          const right = i < globalDesks.length - 1 ? globalDesks[i + 1] : null;
+          if (seatId !== 'E1-01' && seatId !== 'E1-02') {
+            const leftMatch = left && left.dayQA && left.dayQA.lob && left.dayQA.lob.toLowerCase().trim() === curLob && left.seatId !== 'E1-01';
+            const rightMatch = right && right.dayQA && right.dayQA.lob && right.dayQA.lob.toLowerCase().trim() === curLob && right.seatId !== 'E1-02';
+            dayConf = Boolean(leftMatch || rightMatch);
+          }
+        }
+        d.dayConflict = dayConf;
+
+        let nightConf = false;
+        if (d.nightQA && d.nightQA.lob && d.nightQA.lob !== 'Vacant' && !d.nightQA.isOT && !d.isOT) {
+          const curLob = d.nightQA.lob.toLowerCase().trim();
+          const left = i > 0 ? globalDesks[i - 1] : null;
+          const right = i < globalDesks.length - 1 ? globalDesks[i + 1] : null;
+          if (seatId !== 'E2-02' && seatId !== 'E2-03') {
+            const leftMatch = left && left.nightQA && left.nightQA.lob && left.nightQA.lob.toLowerCase().trim() === curLob && left.seatId !== 'E2-02';
+            const rightMatch = right && right.nightQA && right.nightQA.lob && right.nightQA.lob.toLowerCase().trim() === curLob && right.seatId !== 'E2-03';
+            nightConf = Boolean(leftMatch || rightMatch);
+          }
+        }
+        d.nightConflict = nightConf;
+
+        if (!d.isOT && (d.dayConflict || d.nightConflict)) conflictCount++;
+      }
+      document.getElementById('valConflicts').innerText = conflictCount;
+    }
+
+    function onDeskLobChange(seatId, shift, selectedLob) {
+      const desk = globalDesks.find(d => d.seatId === seatId);
+      if (!desk) return;
+      const qaObj = (shift === 'day') ? desk.dayQA : desk.nightQA;
+      if (qaObj) {
+        qaObj.lob = selectedLob;
+        if (selectedLob !== 'All' && selectedLob !== 'Vacant' && selectedLob !== 'OT Row') {
+          const roster = (shift === 'day') ? allDayQAs : allNightQAs;
+          const valid = roster.some(q => q.name === qaObj.name && q.lob === selectedLob);
+          if (!valid) qaObj.name = '';
+        }
+      }
+      recalculateConflicts();
+      renderFloor();
+    }
+
+    function onDeskQAChange(seatId, shift, selectedName) {
+      const desk = globalDesks.find(d => d.seatId === seatId);
+      if (!desk) return;
+      const roster = (shift === 'day') ? allDayQAs : allNightQAs;
+      const found = roster.find(q => q.name === selectedName);
+
+      if (found) {
+        if (shift === 'day') desk.dayQA = { ...found };
+        else { desk.nightQA = { ...found, isOT: false }; desk.isOT = false; }
+      } else if (selectedName === 'VACANT') {
+        if (shift === 'day') desk.dayQA = null;
+        else desk.nightQA = null;
+      } else if (selectedName === 'OT_ROW') {
+        if (shift === 'night') {
+          desk.nightQA = { actId: "OT-RESERVED", name: "OT Reserved Desk", lob: "OT Row", shiftInfo: "Available for OT", isOT: true };
+          desk.isOT = true;
+        }
+      }
+      recalculateConflicts();
+      renderFloor();
+    }
+
+    function renderFloor() {
+      const container = document.getElementById('baysContainer');
+      container.innerHTML = '';
+      const query = document.getElementById('searchInput').value.trim().toLowerCase();
+      const selectedLob = document.getElementById('lobFilter').value.trim().toLowerCase();
+      const filterBay = document.getElementById('bayFilter').value;
+
+      ['E2', 'E1', 'D8', 'D7'].forEach(bayName => {
+        if (filterBay && filterBay !== bayName) return;
+        const bayDesks = globalDesks.filter(d => d.bay === bayName);
+        if (bayDesks.length === 0) return;
+
+        const isOTBay = bayName === 'D7';
+        const bayBlock = document.createElement('div');
+        bayBlock.className = `bay-block ${isOTBay ? 'ot-bay' : ''}`;
+        bayBlock.innerHTML = `
+          <div class="bay-header">
+            <span>${isOTBay ? '⚡ Bay D7 (Overflow & OT Ready Row)' : `Bay ${bayName}`}</span>
+            <span style="font-size:12px; font-weight:normal; color:#64748b;">${bayDesks[0].seatId} → ${bayDesks[bayDesks.length - 1].seatId} (${bayDesks.length} Desks)</span>
+          </div>
+          <div class="desk-grid" id="grid-${bayName}"></div>
+        `;
+        container.appendChild(bayBlock);
+        const grid = bayBlock.querySelector(`#grid-${bayName}`);
+
+        bayDesks.forEach(desk => {
+          const dayLob = (desk.dayQA?.lob || '').trim().toLowerCase();
+          const nightLob = (desk.nightQA?.lob || '').trim().toLowerCase();
+          const dayName = (desk.dayQA?.name || '').toLowerCase();
+          const nightName = (desk.nightQA?.name || '').toLowerCase();
+          const seatId = desk.seatId.toLowerCase();
+
+          let lobMatches = true;
+          if (selectedLob !== '') {
+            if (currentShift === 'day') lobMatches = dayLob === selectedLob;
+            else if (currentShift === 'night') lobMatches = nightLob === selectedLob;
+            else lobMatches = (dayLob === selectedLob) || (nightLob === selectedLob);
+          }
+
+          let searchMatches = true;
+          if (query !== '') {
+            searchMatches = seatId.includes(query) || dayName.includes(query) || nightName.includes(query);
+          }
+          if (!lobMatches || !searchMatches) return;
+
+          const isTLDesk = desk.seatId === "E2-01";
+          const isOTDesk = desk.isOT;
+          const hasConflict = !isTLDesk && !isOTDesk && (
+            (currentShift === 'day' && desk.dayConflict) ||
+            (currentShift === 'night' && desk.nightConflict) ||
+            (currentShift === 'combined' && (desk.dayConflict || desk.nightConflict))
+          );
+
+          const card = document.createElement('div');
+          card.className = `desk-card ${hasConflict ? 'conflict' : ''} ${isTLDesk ? 'lead-desk' : ''}`;
+
+          let cardHtml = `
+            <div class="desk-title">
+              <span>${desk.seatId}</span>
+              ${isOTDesk ? '<span class="desk-status-badge ot">⚡ OT Ready</span>' :
+                (isTLDesk ? '<span class="desk-status-badge lead">★ Lead Desk</span>' :
+                  (hasConflict ? '<span class="desk-status-badge alert">⚠️ Conflict</span>' : '<span class="desk-status-badge safe">● Safe</span>'))}
+            </div>
+          `;
+
+          // Day Slot Dropdown
+          if (currentShift === 'combined' || currentShift === 'day') {
+            const curDayQA = desk.dayQA?.name || '';
+            const curDayLob = desk.dayQA?.lob || '';
+            const dayLobs = getAllLobsForShift('day');
+            cardHtml += `
+              <div class="shift-slot">
+                <div class="shift-meta">
+                  <span class="shift-indicator day">☀️ Day Shift</span>
+                  ${curDayLob ? `<span class="lob-pill ${getLobClass(curDayLob)}">${curDayLob}</span>` : ''}
+                </div>
+                ${isTLDesk ? `<div style="font-weight:700; font-size:12px; color:#854d0e;">QA TL (Team Lead)</div>` : `
+                  <div class="desk-dropdown-group">
+                    <div class="dropdown-row"><label>LOB:</label>
+                      <select class="desk-select" onchange="onDeskLobChange('${desk.seatId}', 'day', this.value)">
+                        <option value="All">-- Filter LOB --</option>
+                        ${dayLobs.map(l => `<option value="${l}" ${l === curDayLob ? 'selected' : ''}>${l}</option>`).join('')}
+                      </select>
+                    </div>
+                    <div class="dropdown-row"><label>QA:</label>
+                      <select class="desk-select" onchange="onDeskQAChange('${desk.seatId}', 'day', this.value)">
+                        <option value="VACANT">-- Vacant --</option>
+                        ${allDayQAs.filter(q => !curDayLob || curDayLob === 'All' || q.lob === curDayLob).map(q => `<option value="${q.name}" ${q.name === curDayQA ? 'selected' : ''}>${q.name} (${q.lob})</option>`).join('')}
+                      </select>
+                    </div>
+                  </div>
+                `}
+              </div>
+            `;
+          }
+
+          // Night Slot Dropdown
+          if (currentShift === 'combined' || currentShift === 'night') {
+            const curNightQA = desk.nightQA?.name || '';
+            const curNightLob = desk.nightQA?.lob || '';
+            const nightLobs = getAllLobsForShift('night');
+            cardHtml += `
+              <div class="shift-slot">
+                <div class="shift-meta">
+                  <span class="shift-indicator night">🌙 Night Shift</span>
+                  ${curNightLob ? `<span class="lob-pill ${getLobClass(curNightLob)}">${curNightLob}</span>` : ''}
+                </div>
+                ${isTLDesk ? `<div style="font-weight:700; font-size:12px; color:#854d0e;">QA TL (Team Lead)</div>` : `
+                  <div class="desk-dropdown-group">
+                    <div class="dropdown-row"><label>LOB:</label>
+                      <select class="desk-select" onchange="onDeskLobChange('${desk.seatId}', 'night', this.value)">
+                        <option value="All">-- Filter LOB --</option>
+                        <option value="OT Row" ${desk.isOT ? 'selected' : ''}>⚡ OT Row</option>
+                        ${nightLobs.map(l => `<option value="${l}" ${l === curNightLob && !desk.isOT ? 'selected' : ''}>${l}</option>`).join('')}
+                      </select>
+                    </div>
+                    <div class="dropdown-row"><label>QA:</label>
+                      <select class="desk-select" onchange="onDeskQAChange('${desk.seatId}', 'night', this.value)">
+                        <option value="VACANT">-- Vacant --</option>
+                        <option value="OT_ROW" ${desk.isOT ? 'selected' : ''}>⚡ Reserve for OT</option>
+                        ${allNightQAs.filter(q => !curNightLob || curNightLob === 'All' || q.lob === curNightLob).map(q => `<option value="${q.name}" ${q.name === curNightQA && !desk.isOT ? 'selected' : ''}>${q.name} (${q.lob})</option>`).join('')}
+                      </select>
+                    </div>
+                  </div>
+                `}
+              </div>
+            `;
+          }
+
+          card.innerHTML = cardHtml;
+          grid.appendChild(card);
+        });
+      });
+    }
+
+    function saveToSheet() {
+      const btn = document.querySelector('.btn-save');
+      const origText = btn.innerText;
+      btn.innerText = '⏳ Publishing...';
+      btn.disabled = true;
+
+      google.script.run
+        .withSuccessHandler(res => {
+          btn.innerText = origText;
+          btn.disabled = false;
+          alert(res.message);
+        })
+        .withFailureHandler(err => {
+          btn.innerText = origText;
+          btn.disabled = false;
+          alert('Save Failed: ' + err.message);
+        })
+        .saveManualAllocation(globalDesks);
+    }
+  </script>
+</body>
+</html>
