@@ -241,7 +241,17 @@
     '#demoMail .it{padding:10px 14px;border-bottom:1px solid #f0f1f6;cursor:pointer}#demoMail .it:hover,#demoMail .it.sel{background:#eef2ff}#demoMail .it b{display:block;font-size:13px}#demoMail .it span{font-size:12px;color:#6b6f86;word-break:break-all}' +
     '#demoMail .view{display:flex;flex-direction:column;min-width:0}#demoMail .meta{padding:12px 16px;border-bottom:1px solid #e5e7ef;font-size:12.5px;color:#4b4f66}#demoMail .meta b{color:#141428;font-size:14px;display:block;margin-bottom:4px}#demoMail iframe{flex:1;border:0;width:100%;background:#fff}' +
     '#demoMail .x{border:0;background:#141428;color:#fff;border-radius:8px;padding:5px 10px;cursor:pointer}' +
-    '@media(max-width:700px){#demoMail .box{grid-template-columns:minmax(0,1fr);grid-template-rows:150px minmax(0,1fr)}#demoMail .list{border-right:0;border-bottom:1px solid #e5e7ef}}';
+    '@media(max-width:700px){#demoMail .box{grid-template-columns:minmax(0,1fr);grid-template-rows:150px minmax(0,1fr)}#demoMail .list{border-right:0;border-bottom:1px solid #e5e7ef}}' +
+    '#demoAbout{position:fixed;inset:0;z-index:2147483003;background:rgba(10,12,30,.62);display:none;align-items:center;justify-content:center;padding:14px}#demoAbout.on{display:flex}' +
+    '#demoAbout .ab{background:#fff;color:#1e2235;border-radius:16px;width:min(860px,100%);max-height:94vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 30px 80px -20px rgba(0,0,0,.6);font:14.5px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}' +
+    '#demoAbout .ah{background:linear-gradient(110deg,#2D5BFF,#7B3FF2);color:#fff;padding:16px 22px}#demoAbout .ah b{display:block;font-size:19px}#demoAbout .ah span{font-size:13px;opacity:.9}' +
+    '#demoAbout .ac{padding:18px 22px;overflow:auto}#demoAbout .ac .lead{font-size:15.5px;margin-top:0}#demoAbout h4{font-size:12.5px;letter-spacing:.08em;text-transform:uppercase;color:#2D5BFF;margin:20px 0 8px}' +
+    '#demoAbout ol.steps{margin:0;padding-left:20px}#demoAbout li{margin:5px 0}#demoAbout ul{margin:8px 0;padding-left:20px}#demoAbout code{background:#eef1fb;border-radius:5px;padding:1px 6px;font-size:12.5px;color:#2b3a8a}' +
+    '#demoAbout .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}#demoAbout .card{background:#f4f6fd;border:1px solid #dfe4f5;border-radius:10px;padding:10px 12px;font-size:13.5px}#demoAbout .card.warn{background:#fff1f2;border-color:#fecdd3}' +
+    '#demoAbout .tbl{width:100%;border-collapse:collapse;font-size:13.5px}#demoAbout .tbl th{text-align:left;background:#f4f6fd;padding:7px 10px;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:#55597a}#demoAbout .tbl td{padding:7px 10px;border-top:1px solid #e7e9f3;vertical-align:top}' +
+    '#demoAbout .note{margin-top:16px;background:#fff8e1;border:1px solid #fcd34d;border-radius:10px;padding:10px 12px;font-size:13.5px}' +
+    '#demoAbout .af{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:12px 22px;border-top:1px solid #e7e9f3;background:#fafbff}#demoAbout .af label{display:flex;gap:8px;align-items:center;font-weight:600;cursor:pointer}#demoAbout .af input{width:17px;height:17px}' +
+    '#demoAbout .go{border:0;border-radius:10px;padding:10px 18px;font:700 14px inherit;font-family:inherit;background:#2D5BFF;color:#fff;cursor:pointer}#demoAbout .go[disabled]{background:#b9c3e6;cursor:not-allowed}';
   function mount() {
     if (document.getElementById('demoBar')) return;
     var st = document.createElement('style'); st.textContent = css; document.head.appendChild(st);
@@ -250,6 +260,7 @@
     if (DEMO.roles && DEMO.roles.length > 1) {
       html += '<select id="demoRole" title="View the portal as">' + DEMO.roles.map(function (r) { return '<option value="' + r.email + '"' + (r.email === DEMO.user ? ' selected' : '') + '>' + r.label + '</option>'; }).join('') + '</select>';
     }
+    if (DEMO.about) html += '<button type="button" id="demoAboutBtn">How it works</button>';
     if (DEMO.mail !== false) html += '<button type="button" id="demoOutBtn" class="hot">Sent emails (0)</button>';
     html += '<button type="button" id="demoReset" title="Reset the demo data">Reset</button>';
     (DEMO.links || []).forEach(function (l) { html += '<a href="' + l.href + '">' + l.label + '</a>'; });
@@ -268,7 +279,17 @@
     document.getElementById('demoMailX').addEventListener('click', function () { m.classList.remove('on'); });
     m.addEventListener('click', function (e) { if (e.target === m) m.classList.remove('on'); });
     DEMO.updateOutbox();
-    if (DEMO.intro) setTimeout(function () { DEMO.toast(DEMO.intro, 7000); }, 900);
+    if (DEMO.about) {
+      var a = document.createElement('div'); a.id = 'demoAbout'; a.setAttribute('role', 'dialog'); a.setAttribute('aria-modal', 'true');
+      a.innerHTML = '<div class="ab"><div class="ah"><b>' + DEMO.about.title + '</b><span>' + (DEMO.about.sub || 'Read this first: how the tool works, how it scores, and where its data lives') + '</span></div><div class="ac">' + DEMO.about.html + '</div>' +
+        '<div class="af"><label><input type="checkbox" id="demoAboutChk"> I have read how this portal works</label><button type="button" class="go" id="demoAboutGo" disabled>Acknowledge &amp; open portal</button></div></div>';
+      document.body.appendChild(a);
+      var chk = document.getElementById('demoAboutChk'), go = document.getElementById('demoAboutGo');
+      chk.addEventListener('change', function () { go.disabled = !chk.checked; });
+      go.addEventListener('click', function () { a.classList.remove('on'); if (DEMO.intro) DEMO.toast(DEMO.intro, 7000); });
+      document.getElementById('demoAboutBtn').addEventListener('click', function () { chk.checked = true; go.disabled = false; a.classList.add('on'); a.querySelector('.ac').scrollTop = 0; });
+      a.classList.add('on');
+    } else if (DEMO.intro) setTimeout(function () { DEMO.toast(DEMO.intro, 7000); }, 900);
   }
   var tt;
   DEMO.toast = function (msg, ms) {
