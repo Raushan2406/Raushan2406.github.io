@@ -10,8 +10,8 @@
 var D=DEMODATA, R=D.rng(21);
 var smes=[{name:'Kavita Rao',email:'kavita.rao@demo-qa.com'},{name:'Manish Tiwari',email:'manish.tiwari@demo-qa.com'}];
 var fmea=["Was the case resolved correctly?","Was the correct case category selected?","Did the agent avoid unnecessary high AAT/AHT on the case?","Did the agent avoid crossing out the case without providing a resolution?","Did the agent avoid inappropriate use of the Verify status?","Did the agent avoid sharing internal information with the seller?"];
-var gen=["Did agent answer all questions?","Did associate use internal article?","Did the associate reference the correct article and explain self-serve options?","Was root cause acknowledged?","Did associate provide correct Expections and Education?","Did associate acknowledge reopen reason?","Was note template used correctly?","Rude/blame wording avoided?","Case transfer correct?","Was the wording correct and free of spelling errors?","Did CSAT Survey Sent?","Did agent Initiated the IRIS?","Did the agent use the correct email format and/or the required Internal/HR template, where applicable?"];
-var agents=D.AGENTS.slice(0,24), lobs=['SSO MPCX','SSO Disputes (SFF)','SSO Core'];
+var gen=["Did agent answer all questions?","Did associate use internal article?","Did the associate reference the correct article and explain self-serve options?","Was root cause acknowledged?","Did associate provide correct Expections and Education?","Did associate acknowledge reopen reason?","Was note template used correctly?","Rude/blame wording avoided?","Case transfer correct?","Was the wording correct and free of spelling errors?","Did CSAT Survey Sent?","Did agent Initiated the Guided Workflow?","Did the agent use the correct email format and/or the required Internal/HR template, where applicable?"];
+var agents=D.AGENTS.slice(0,24), lobs=['Product Listings','Billing Disputes','General Support'];
 var ros=[['Agent Salesforce Name','LOB','SME Name']];
 agents.forEach(function(a,i){ros.push([a,lobs[i%3],smes[i%2].name]);});
 var hdr=['Week','Audit Date Formatted','Case Number','Agent Salesforce Name','LOB','Source_Sheet','Audit Score','Coaching Note'].concat(fmea).concat(gen).concat(['Emp Status']);
@@ -269,7 +269,7 @@ function getDashboardData() {
     "Case transfer correct?",
     "Was the wording correct and free of spelling errors?",
     "Did CSAT Survey Sent?",
-    "Did agent Initiated the IRIS?",
+    "Did agent Initiated the Guided Workflow?",
     "Did the agent use the correct email format and/or the required Internal/HR template, where applicable?"
   ];
 

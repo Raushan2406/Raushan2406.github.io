@@ -235,13 +235,13 @@
     '#demoBar button.hot{background:#FF6A1A}#demoBar a{color:#9fb6ff;text-decoration:none;padding:6px 8px}' +
     '#demoToast{position:fixed;right:14px;bottom:14px;z-index:2147483001;max-width:min(420px,calc(100vw - 28px));background:#141428;color:#fff;font:500 13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:11px 14px;border-radius:12px;box-shadow:0 12px 30px -10px rgba(0,0,0,.55);opacity:0;transform:translateY(8px);transition:.25s;pointer-events:none;white-space:pre-line}' +
     '#demoToast.on{opacity:1;transform:none}' +
-    '#demoMail{position:fixed;inset:0;z-index:2147483002;background:rgba(10,10,25,.55);display:none;align-items:stretch;justify-content:center;padding:24px 12px}' +
-    '#demoMail.on{display:flex}#demoMail .box{background:#fff;color:#141428;border-radius:16px;width:min(1100px,100%);display:grid;grid-template-columns:minmax(0,300px) minmax(0,1fr);overflow:hidden;font:14px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}' +
+    '#demoMail{position:fixed;inset:0;z-index:2147483002;background:#fff;display:none}' +
+    '#demoMail.on{display:block}#demoMail .box{background:#fff;color:#141428;width:100%;height:100%;display:grid;grid-template-columns:minmax(0,270px) minmax(0,1fr);overflow:hidden;font:14px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}' +
     '#demoMail .list{border-right:1px solid #e5e7ef;overflow:auto}#demoMail .hd{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;border-bottom:1px solid #e5e7ef;font-weight:700}' +
     '#demoMail .it{padding:10px 14px;border-bottom:1px solid #f0f1f6;cursor:pointer}#demoMail .it:hover,#demoMail .it.sel{background:#eef2ff}#demoMail .it b{display:block;font-size:13px}#demoMail .it span{font-size:12px;color:#6b6f86;word-break:break-all}' +
     '#demoMail .view{display:flex;flex-direction:column;min-width:0}#demoMail .meta{padding:12px 16px;border-bottom:1px solid #e5e7ef;font-size:12.5px;color:#4b4f66}#demoMail .meta b{color:#141428;font-size:14px;display:block;margin-bottom:4px}#demoMail iframe{flex:1;border:0;width:100%;background:#fff}' +
     '#demoMail .x{border:0;background:#141428;color:#fff;border-radius:8px;padding:5px 10px;cursor:pointer}' +
-    '@media(max-width:700px){#demoMail .box{grid-template-columns:minmax(0,1fr);grid-template-rows:180px minmax(0,1fr)}#demoMail .list{border-right:0;border-bottom:1px solid #e5e7ef}}';
+    '@media(max-width:700px){#demoMail .box{grid-template-columns:minmax(0,1fr);grid-template-rows:150px minmax(0,1fr)}#demoMail .list{border-right:0;border-bottom:1px solid #e5e7ef}}';
   function mount() {
     if (document.getElementById('demoBar')) return;
     var st = document.createElement('style'); st.textContent = css; document.head.appendChild(st);
@@ -257,7 +257,7 @@
     bar.innerHTML = html; document.body.appendChild(bar);
     var t = document.createElement('div'); t.id = 'demoToast'; t.setAttribute('role', 'status'); document.body.appendChild(t);
     var m = document.createElement('div'); m.id = 'demoMail';
-    m.innerHTML = '<div class="box"><div class="list"><div class="hd"><span>Sent emails</span><button class="x" type="button" id="demoMailX">Close</button></div><div id="demoMailList"></div></div><div class="view"><div class="meta" id="demoMailMeta">Emails the portal sends in the demo appear here. Nothing is really sent.</div><iframe id="demoMailFrame" title="Email preview" sandbox=""></iframe></div></div>';
+    m.innerHTML = '<div class="box"><div class="list"><div class="hd"><span>Sent emails</span><button class="x" type="button" id="demoMailX">Close</button></div><div id="demoMailList"></div></div><div class="view"><div class="meta" id="demoMailMeta">Emails the portal sends in the demo appear here. Nothing is really sent.</div><iframe id="demoMailFrame" title="Email preview" sandbox="allow-same-origin"></iframe></div></div>';
     document.body.appendChild(m);
     var role = document.getElementById('demoRole');
     if (role) role.addEventListener('change', function () { try { sessionStorage.setItem('demoUser', role.value); } catch (e) { } location.reload(); });
@@ -287,10 +287,23 @@
       var e = DEMO.outbox[i]; if (!e) return;
       [].forEach.call(list.querySelectorAll('.it'), function (el) { el.classList.toggle('sel', +el.getAttribute('data-i') === i); });
       document.getElementById('demoMailMeta').innerHTML = '<b>' + esc(e.subject) + '</b>From: ' + esc(e.name || 'Portal') + ' · To: ' + esc(e.to) + (e.cc ? ' · Cc: ' + esc(e.cc) : '');
-      document.getElementById('demoMailFrame').srcdoc = '<!doctype html><meta charset="utf-8"><body style="margin:0;padding:12px;font-family:Arial,sans-serif">' + e.html + '</body>';
+      var fr = document.getElementById('demoMailFrame');
+      fr.onload = fitMail;
+      fr.srcdoc = '<!doctype html><meta charset="utf-8"><body style="margin:0;padding:14px;font-family:Arial,sans-serif">' + e.html + '</body>';
     }
     m.classList.add('on'); show(idx == null ? DEMO.outbox.length - 1 : idx);
   };
+  // shrink a wide email so it fits the preview width (no sideways scrolling)
+  function fitMail() {
+    var fr = document.getElementById('demoMailFrame'); if (!fr) return;
+    try {
+      var d = fr.contentDocument; if (!d || !d.body) return;
+      d.body.style.zoom = 1;
+      var w = Math.max(d.documentElement.scrollWidth, d.body.scrollWidth), cw = fr.clientWidth;
+      if (w > cw + 2) d.body.style.zoom = (cw - 4) / w;
+    } catch (e) { }
+  }
+  window.addEventListener('resize', function () { var m = document.getElementById('demoMail'); if (m && m.classList.contains('on')) fitMail(); });
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
 
   try { var su = sessionStorage.getItem('demoUser'); if (su && DEMO.roles && DEMO.roles.some(function (r) { return r.email === su; })) DEMO.user = su; } catch (e) { }

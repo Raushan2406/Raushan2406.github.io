@@ -10,32 +10,32 @@
 var D=DEMODATA, R=D.rng(3), me=D.QAS[0];
 var detail=[['Name','Email']].concat(D.QAS.map(function(q){return [q.name,q.email];}));
 function pick(a){return a[Math.floor(R()*a.length)];}
-var cats=['Disputes>Enhanced Returns','Item Setup>Variant Group','Orders>Cancellation','Payments>Reimbursement','Inventory>Inbound Discrepancy','Listing>Brand Gating'];
+var cats=['Disputes>Returns','Item Setup>Variant Group','Orders>Cancellation','Payments>Reimbursement','Inventory>Inbound Discrepancy','Listing>Brand Approval'];
 var n=16800000;
 function cases(k){var a=[];for(var i=0;i<k;i++)a.push(String(n+=7+Math.floor(R()*90)));return a;}
 var sheets={Detail:detail};
 ['Reopen','FCR','SLA_First_Resolve','SLA_First_Response','SLA_Final_Resolve','General Audit'].forEach(function(s){
   var rows=[['Case Number','LOB','QA Salesforce Name','Category HASH']];
   cases(12).forEach(function(c){rows.push([c,me.lob,me.name,pick(cats)]);});
-  cases(4).forEach(function(c){rows.push([c,'SSO Core','Priya Nair',pick(cats)]);});
+  cases(4).forEach(function(c){rows.push([c,'General Support','Priya Nair',pick(cats)]);});
   sheets[s]=rows;});
 var csat=[['Case Number','LOB','QA Salesforce Name','Category HASH','Agent Salesforce Name','Response Value','Survey Sent Date','Survey Completed Date']];
 cases(10).forEach(function(c){csat.push([c,me.lob,me.name,pick(cats),pick(D.AGENTS),pick(['1','2','2','3']),'2026-10-1'+Math.floor(R()*9),'2026-10-2'+Math.floor(R()*7)]);});
 sheets.CSAT=csat;
 var bpo=[['Case Number','LOB','QA Salesforce Name','Agent Salesforce Name',"Description of seller's issue",'How should the agent have handled the case?','Jira Ticket','KBs for agent to review','Issues/Coachings']];
 cases(8).forEach(function(c){bpo.push([c,me.lob,me.name,pick(D.AGENTS),'Seller asked why the reimbursement was lower than the item price.','Explain the reimbursement policy and share the claim breakdown.','JIRA-'+(4000+Math.floor(R()*900)),'KB-'+(100000+Math.floor(R()*9000)),'Incomplete resolution']);});
-sheets['BPO Coaching']=bpo;
-['Need Info Abandoned','ADR','AHT'].forEach(function(s){
-  var rows=[['Week','Case Number','Case Owner','Case LOB','Need Info Abandoned','Category HASH','QA Salesforce Name']];
-  if(s!=='Need Info Abandoned') rows[0].pop();
-  cases(10).forEach(function(c){var r=['37',c,pick(D.AGENTS),me.lob,s==='Need Info Abandoned'?pick(['Yes','No']):'',pick(cats)]; if(s==='Need Info Abandoned') r.push(me.name); rows.push(r);});
+sheets['Escalation Review']=bpo;
+['Info Request Abandoned','Resolution Delay','AHT'].forEach(function(s){
+  var rows=[['Week','Case Number','Case Owner','Case LOB','Info Request Abandoned','Category HASH','QA Salesforce Name']];
+  if(s!=='Info Request Abandoned') rows[0].pop();
+  cases(10).forEach(function(c){var r=['37',c,pick(D.AGENTS),me.lob,s==='Info Request Abandoned'?pick(['Yes','No']):'',pick(cats)]; if(s==='Info Request Abandoned') r.push(me.name); rows.push(r);});
   sheets[s]=rows;});
 sheets.Notice=[['Type','Title','Subtitle','Content'],
  ['NOTICE','Calibration session','Live','Thursday 4 PM: FCR calibration for all QAs. Bring two cases you found hard to score.'],
  ['REMINDER','Dropdown Instruction','','If the case was handled by another team, select Other > Handled By Another Team. Do not type it in Remarks.'],
- ['REMINDER','Parameter Instruction','','Q10 Case status: check that the agent set the right status (Need Info, Need Info Internal, Verify).'],
+ ['REMINDER','Parameter Instruction','','Q10 Case status: check that the agent set the right status (Awaiting Info, Awaiting Internal Info, Verify).'],
  ['REMINDER','Parameter Instruction','','Never select N/A for "Reopen Reason Acknowledged" on Reopen audits. It is only N/A for FCR.'],
- ['REMINDER','Parameter Instruction','','Mark parameters that do not apply to your LOB as N/A (for example IRIS in WFS Disputes).']];
+ ['REMINDER','Parameter Instruction','','Mark parameters that do not apply to your LOB as N/A (for example Guided Workflow in Order Disputes).']];
 DEMO.book('AUDIT_SS',sheets);
 DEMO.book('HR_SS',{Sheet1:[['Seller / Template']].concat(['Brightline Home','Kestrel Outdoor','Maple & Co','Nimbus Electronics','Orchid Living','Pioneer Pet Supplies','Quarry Tools','Riverbend Kitchen'].map(function(x){return [x];}))});
 var ros=[['ACT ID','Name','Email','LOB','Manager','Shift','Salesforce Name']];
@@ -54,7 +54,7 @@ const ROSTER_SPREADSHEET_ID = 'ROSTER_SS';
 function doGet() {
   return HtmlService.createTemplateFromFile('index')
     .evaluate()
-    .setTitle('QA Audit Portal - Acuitty Tech')
+    .setTitle('QA Audit Portal')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
@@ -82,8 +82,8 @@ function isAuthorized() {
 function getSheetNames() {
   return [
     'Reopen', 'FCR', 'SLA_First_Resolve', 'SLA_First_Response', 'SLA_Final_Resolve',
-    'General Audit', 'CSAT', 'BPO Coaching',
-    'Need Info Abandoned', 'ADR', 'AHT'
+    'General Audit', 'CSAT', 'Escalation Review',
+    'Info Request Abandoned', 'Resolution Delay', 'AHT'
   ];
 }
 
@@ -151,12 +151,12 @@ function fetchNextCase(sheetName) {
   const headers = data[0].map(h => h.toString().trim().toLowerCase());
 
   const caseCol = findCol(headers, 'case number');
-  const lobCol = ['Need Info Abandoned', 'ADR', 'AHT'].includes(sheetName)
+  const lobCol = ['Info Request Abandoned', 'Resolution Delay', 'AHT'].includes(sheetName)
     ? findCol(headers, 'case lob')
     : findCol(headers, 'lob');
 
   let qaCol = findCol(headers, 'qa salesforce name');
-  if (qaCol === -1 && ['ADR', 'AHT'].includes(sheetName)) {
+  if (qaCol === -1 && ['Resolution Delay', 'AHT'].includes(sheetName)) {
     qaCol = findCol(headers, 'case owner');
   }
 
@@ -175,21 +175,21 @@ function fetchNextCase(sheetName) {
       throw new Error('CSAT sheet missing required columns.');
   }
 
-  // BPO Coaching columns
+  // Escalation Review columns
   let bpocCols = {};
-  if (sheetName === 'BPO Coaching') {
+  if (sheetName === 'Escalation Review') {
     bpocCols.descCol = findCol(headers, "description of seller's issue");
     bpocCols.handleCol = findCol(headers, 'how should the agent have handled the case?');
     bpocCols.jiraCol = findCol(headers, 'jira ticket');
     bpocCols.kbCol = findCol(headers, 'kbs for agent to review');
     bpocCols.issuesCol = findCol(headers, 'issues/coachings');
     if (Object.values(bpocCols).some(idx => idx === -1))
-      throw new Error('BPO Coaching sheet missing required columns.');
+      throw new Error('Escalation Review sheet missing required columns.');
   }
 
   let weekCol = findCol(headers, 'week');
   let ownerCol = findCol(headers, 'case owner');
-  let niaValCol = findCol(headers, 'need info abandoned');
+  let niaValCol = findCol(headers, 'info request abandoned');
 
   // Audited cases check
   const auditSheetName = 'AuditData_' + sheetName.replace(/[^a-zA-Z0-9_]/g, '_');
@@ -229,7 +229,7 @@ function fetchNextCase(sheetName) {
     }
   }
 
-  const agentCol = (sheetName === 'CSAT' || sheetName === 'BPO Coaching')
+  const agentCol = (sheetName === 'CSAT' || sheetName === 'Escalation Review')
     ? findCol(headers, 'agent salesforce name')
     : -1;
 
@@ -262,11 +262,11 @@ function fetchNextCase(sheetName) {
       surveyCompletedDate: surveyCompletedDate
     };
 
-    if ((sheetName === 'CSAT' || sheetName === 'BPO Coaching') && agentCol !== -1) {
+    if ((sheetName === 'CSAT' || sheetName === 'Escalation Review') && agentCol !== -1) {
       result.agentSalesforceName = data[i][agentCol]?.toString().trim() || '';
     }
 
-    if (sheetName === 'BPO Coaching') {
+    if (sheetName === 'Escalation Review') {
       result.bpocFields = {
         description: data[i][bpocCols.descCol]?.toString().trim() || '',
         handling: data[i][bpocCols.handleCol]?.toString().trim() || '',
@@ -276,7 +276,7 @@ function fetchNextCase(sheetName) {
       };
     }
 
-    if (['Need Info Abandoned', 'ADR', 'AHT'].includes(sheetName)) {
+    if (['Info Request Abandoned', 'Resolution Delay', 'AHT'].includes(sheetName)) {
       result.niaFields = {
         week: weekCol !== -1 ? (data[i][weekCol]?.toString().trim() || '') : '',
         caseOwner: ownerCol !== -1 ? (data[i][ownerCol]?.toString().trim() || '') : '',
@@ -301,7 +301,7 @@ function skipCase(caseNumber, sourceSheet) {
   return { success: true };
 }
 
-// ---------- Live Dynamic Fetcher from HR Template Sheet (Column A) ----------
+// ---------- Live Dynamic Fetcher from Policy Template Sheet (Column A) ----------
 function getHRTemplateNames() {
   try {
     const ss = SpreadsheetApp.openById(HR_SPREADSHEET_ID);
@@ -317,12 +317,12 @@ function getHRTemplateNames() {
     }
     return Array.from(nameSet).sort();
   } catch (err) {
-    Logger.log("Error reading HR Template Sheet: " + err.message);
+    Logger.log("Error reading Policy Template Sheet: " + err.message);
     return [];
   }
 }
 
-// ---------- Need Info Dropdown Options ----------
+// ---------- Awaiting Info Dropdown Options ----------
 function getNeedInfoRequiredOptions() {
   return [
     "Elaboration",
@@ -339,7 +339,7 @@ function getNeedInfoRequiredOptions() {
   ];
 }
 
-// ---------- ADR / AHT Dropdowns ----------
+// ---------- Resolution Delay / AHT Dropdowns ----------
 function getADRReasonOptions() {
   return [
     "Agent error - Delay in Response",
@@ -364,23 +364,23 @@ function getAHTReasonOptions() {
 
 function getExternalTeamSubReasons() {
   return [
-    "Canada Service now",
-    "IRIS",
-    "ITS Request",
+    "Regional Service Desk",
+    "Guided Workflow",
+    "IT Service Request",
     "Outlook",
-    "Pricing Anamoly",
+    "Pricing Anomaly",
     "Production JIRA",
-    "Review Refresh",
-    "Dependency from FC",
-    "SFS Team",
+    "Content Refresh",
+    "Dependency from Warehouse",
+    "Fulfillment Team",
     "Compliance Team",
-    "Escalated to Fixit",
-    "SSS Optout",
-    "Strikethrough",
+    "Escalated to Tech Support",
+    "Program Opt-out",
+    "Pricing Support",
     "Supervisor Escalation",
     "Techops JIRA",
     "Slack",
-    "UGC",
+    "Content Moderation",
     "SOP Not Available",
     "N/A"
   ];
@@ -390,16 +390,16 @@ function getExternalTeamSubReasons() {
 function getReopenRootCauseHierarchy() {
   const rootMap = {
     "System": ["System issue","Other - see remark"],
-    "Process\\Policy": ["Duplicate Case Handling Process","HR Template Used","UA Template Used","IRIS-GWF/Agentic AI Followed","Other - see remark"],
+    "Process\\Policy": ["Duplicate Case Handling Process","Policy Template Used","Escalation Template Used","Guided Workflow/AI Assistant Followed","Other - see remark"],
     "Seller": ["Seller ask new question","Seller wants to keep case open for verification","Additional clarification requested by seller","Dissatisfied_with_Solution","Dissatisfied_with_Process_Policy","Dissactified_with_being_referred_to_3rd_party","Other - see remark"],
     "Agent": ["Agent click wrong case status","Incompleted solution(Multiple questions in a case)","Incompleted solution(1 question in a case)","Incorrect Resolution","Other - see remark"],
     "AutoReply_ThankYou_Blank": ["Thank you","Email auto reply from seller","Blank mail from seller","Other - see remark"],
     "Other": ["Handled by Another Team","Other - see remark"]
   };
   const sellerDsatMap = {
-    "Dissatisfied_with_Solution": ["DIM Dispute - Not Accept the Reimbursement Value","DIM - Request to verify past Historical fees","DIM Dispute - Need Remeasured Photos from FC","DIM Dispute - Not Accept the Remeasured Data","IBQ Dispute - Not Accept the Reimbursement Value","IBQ Dispute - Not accepting the Overage receives","IBQ Dispute - 10 days dispute window","ITS Shipment - Within 10 Days","IBQ Dispute - 50 days dispute window","Refund Dispute - 45 days dispute window","Not Satisfied with Reimbursement Amount","Refund Dispute -others (details see remark)","Other - see remark"],
-    "Dissatisfied_with_Process_Policy": ["Buy Box Loss","Negative Reviews - Not meeting criteria","Negative Reviews - logistics/ shipping issues","Restricted sale for international sellers","Sellers can't cancel the WFS Order","Sellers can't change the product ID for WFS Item","Duplicate variants found despite seller claim","Other - see remark"],
-    "Dissactified_with_being_referred_to_3rd_party": ["Refered to Carrier For shipment missing","Refered to CCA for refund/cancel/late order","Refered to Account Manager - Event","Other - see remark"],
+    "Dissatisfied_with_Solution": ["Dimension Dispute - Not Accept the Reimbursement Value","Dimension - Request to verify past Historical fees","Dimension Dispute - Need Remeasured Photos from FC","Dimension Dispute - Not Accept the Remeasured Data","Inbound Quantity Dispute - Not Accept the Reimbursement Value","Inbound Quantity Dispute - Not accepting the Overage receives","Inbound Quantity Dispute - 10 days dispute window","Inbound Shipment - Within 10 Days","Inbound Quantity Dispute - 50 days dispute window","Refund Dispute - 45 days dispute window","Not Satisfied with Reimbursement Amount","Refund Dispute -others (details see remark)","Other - see remark"],
+    "Dissatisfied_with_Process_Policy": ["Featured Offer Loss","Negative Reviews - Not meeting criteria","Negative Reviews - logistics/ shipping issues","Restricted sale for international sellers","Sellers can't cancel the Fulfillment Order","Sellers can't change the product ID for Fulfillment Item","Duplicate variants found despite seller claim","Other - see remark"],
+    "Dissactified_with_being_referred_to_3rd_party": ["Refered to Carrier For shipment missing","Refered to Customer Care for refund/cancel/late order","Refered to Account Manager - Event","Other - see remark"],
   };
   const hierarchy = {};
   for (const [root, subs] of Object.entries(rootMap)) {
@@ -416,7 +416,7 @@ function getReopenRootCauseHierarchy() {
 function getFCRReasonMap() {
   return {
     "System": ["System issue","Email Sent Twice","Automation issue","Other - see remark"],
-    "Process/Policy": ["IRIS GWF Limitation","HR Template Used","UA Template Used","Verify Status Limitation - SOP Followed","Escalated to External Team","Policy Gap","SOP Limitation","Other - see remark"],
+    "Process/Policy": ["Guided Workflow Limitation","Policy Template Used","Escalation Template Used","Verify Status Limitation - SOP Followed","Escalated to External Team","Policy Gap","SOP Limitation","Other - see remark"],
     "Seller": ["Additional Information Required from Seller","Cross Question - Related to Same Issue","Cross Question - New/Unrelated Issue","Reopened Without Response","Seller Dissatisfied","Other - see remark"],
     "Agent": ["Incorrect/Partial Resolution Provided","No Proper Troubleshooting","SOP Not Followed IQD Claim Value  $100-$500","Unnecessary Internal Email Sent – Agent Fault","Other - see remark"],
     "AutoReply_ThankYou_Blank": ["Thank you","Email auto reply from seller","Blank email from seller","System generated email","Other - see remark"],
@@ -447,22 +447,22 @@ function getFCRAlternativeSubReasonMap() {
       "Other - see remark"
     ],
     "Escalated to External Team": [
-      "Escalated to Fixit",
+      "Escalated to Tech Support",
       "Escalated to TechOps JIRA",
       "Escalated to Production JIRA",
-      "Escalated to Canada Service Now",
-      "Escalated to ITS Request",
-      "Escalated to SSS Opt Out",
-      "Escalated to Strikethrough",
+      "Escalated to Regional Service Desk",
+      "Escalated to IT Service Request",
+      "Escalated to Program Opt-out",
+      "Escalated to Pricing Support",
       "Escalated to Slack",
       "Escalated to Outlook",
       "Escalated to Team",
-      "Updated CN Brand Gating Excel file",
+      "Updated Brand Approval tracker",
       "Other - see remark"
     ],
     "Incorrect/Partial Resolution Provided": [
-      "Acuitty Agent Fault",
-      "Non-Acuitty Agent Fault",
+      "In-house Agent Fault",
+      "External Team Agent Fault",
       "Other - see remark"
     ]
   };
@@ -482,7 +482,7 @@ function getSLAFirstResolveReasons() {
 function getSLAFirstResponseReasons() {
   return [
     "Agent Error - Agent Delay in Response","Received after SLA Breach - Handled by another Team",
-    "Agent Error - Incorrect Tranfer Initially","Stucked in WFS Disputes landing Queue",
+    "Agent Error - Incorrect Tranfer Initially","Stucked in Order Disputes landing Queue",
     "Agent Error - Failed to Send email initally (Verify status)",
     "Agent Error - Incorrect Tranfer Initially - Non Acuity Agent","Received after SLA Breach"
   ];
@@ -500,7 +500,7 @@ function getSLAFinalResolveReasons() {
     "System/Policy Limitation",
     "Agent Incorrectly selected the case status","Agent kept the case in Verify Unnecessarily",
     "Case Stucked in Queue Backlog",
-    "Agent Incorrectly marked case in Need Info- Internal","Agent Error - Incorrect Initial Routing"
+    "Agent Incorrectly marked case in Awaiting Info- Internal","Agent Error - Incorrect Initial Routing"
   ];
 }
 
@@ -512,7 +512,7 @@ function submitAudit(formData) {
   const auditSheet = ss.getSheetByName(sheetName) || ss.insertSheet(sheetName);
 
   let percent = 0;
-  if (['Reopen', 'FCR', 'General Audit', 'CSAT', 'BPO Coaching'].includes(queue)) {
+  if (['Reopen', 'FCR', 'General Audit', 'CSAT', 'Escalation Review'].includes(queue)) {
     const weights = [10,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5];
     let totalW = 0, earnedW = 0;
     const q1 = formData.q1;
@@ -552,11 +552,11 @@ function submitAudit(formData) {
     'Q19_OperatingBehaviorCorrect'
   ];
 
-  if (queue === 'Need Info Abandoned') {
+  if (queue === 'Info Request Abandoned') {
     if (auditSheet.getLastRow() === 0) {
       auditSheet.appendRow([
         'Week', 'Timestamp', 'QA_Email', 'Source_Sheet', 'Case Number',
-        'Case Owner', 'Case LOB', 'Need Info Abandoned', 'Category HASH',
+        'Case Owner', 'Case LOB', 'Info Request Abandoned', 'Category HASH',
         'Auditor', 'What was required?', 'Summary', 'Agent Fault',
         'Audit_Start_Time', 'Audit_End_Time', 'Audit_Duration_Minutes'
       ]);
@@ -579,11 +579,11 @@ function submitAudit(formData) {
       formData.auditEndTime,
       formData.auditDuration
     ]);
-  } else if (['ADR', 'AHT'].includes(queue)) {
+  } else if (['Resolution Delay', 'AHT'].includes(queue)) {
     if (auditSheet.getLastRow() === 0) {
       auditSheet.appendRow([
         'Week', 'Timestamp', 'QA_Email', 'Source_Sheet', 'Case Number',
-        'Case Owner', 'Case LOB', 'Need Info Abandoned', 'Category HASH',
+        'Case Owner', 'Case LOB', 'Info Request Abandoned', 'Category HASH',
         'Auditor', 'What was required?', 'Summary',
         'Previous Queue Name', 'Previous Queue assigned date', 'Latest assignemnt date to Main queue',
         'Agent Fault', 'Audit_Start_Time', 'Audit_End_Time', 'Audit_Duration_Minutes'
@@ -666,7 +666,7 @@ function submitAudit(formData) {
       formData.diagnosticRemarks, formData.caseAcceptDateTime || '',
       formData.auditStartTime, formData.auditEndTime, formData.auditDuration
     ]);
-  } else if (queue === 'BPO Coaching') {
+  } else if (queue === 'Escalation Review') {
     if (auditSheet.getLastRow() === 0) {
       auditSheet.appendRow([
         'Timestamp', 'QA_Email', 'Source_Sheet', 'Case_Number', 'Agent_Salesforce_Name', 'LOB', 'Touch_Counter', 'Auditor_Name',
@@ -848,7 +848,7 @@ if(DEMO.init) DEMO.init();
   
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>QA Audit Portal - Acuitty Tech</title>
+  <title>QA Audit Portal</title>
   <link rel="stylesheet" href="bs4.css">
   <link rel="stylesheet" href="fa.css">
   <style id="theme-style">
@@ -941,7 +941,7 @@ if(DEMO.init) DEMO.init();
 
 <nav class="navbar navbar-dark d-flex justify-content-between align-items-center">
   <div class="d-flex align-items-center">
-    <span class="navbar-brand mb-0"><i class="fas fa-play mr-2"></i> <span>Acuitty</span> Tech</span>
+    <span class="navbar-brand mb-0"><i class="fas fa-play mr-2"></i> <span>QA</span> Audit Portal</span>
     <span class="badge badge-secondary ml-2 font-weight-normal py-1 px-2">QA Portal</span>
   </div>
   <div class="d-flex align-items-center">
@@ -991,7 +991,7 @@ if(DEMO.init) DEMO.init();
             <li><strong>QA Guidelines Button:</strong> Re-opens this reference manual at any time from the top navigation bar.</li>
             <li><strong>Left Panel (QA Check Reminders):</strong> Displays active operational quality watchouts and calibration reminders synced from the Config sheet.</li>
             <li><strong>Right Panel (QA Notice Board):</strong> Displays live policy updates, calibration announcements, and direct documentation hyperlinks.</li>
-            <li><strong>Audit Code:</strong> The target audit queue to evaluate (e.g., <em>Reopen</em>, <em>FCR</em>, <em>CSAT</em>, <em>SLA_First_Response</em>, <em>SLA_First_Resolve</em>, <em>SLA_Final_Resolve</em>, <em>Need Info Abandoned</em>, <em>ADR</em>, <em>AHT</em>, <em>General Audit</em>, <em>BPO Coaching</em>).</li>
+            <li><strong>Audit Code:</strong> The target audit queue to evaluate (e.g., <em>Reopen</em>, <em>FCR</em>, <em>CSAT</em>, <em>SLA_First_Response</em>, <em>SLA_First_Resolve</em>, <em>SLA_Final_Resolve</em>, <em>Info Request Abandoned</em>, <em>Resolution Delay</em>, <em>AHT</em>, <em>General Audit</em>, <em>Escalation Review</em>).</li>
             <li><strong>Fetch Next:</strong> Fetches the oldest un-audited case for the selected queue while automatically excluding previously audited or skipped cases.</li>
             <li><strong>Skip Button:</strong> Marks a case in the <code>SkippedCases</code> tab under your email ID if self-handled or corrupted, and retrieves the next record.</li>
             <li><strong>Touch Counter:</strong> Numeric integer recording the total number of agent responses/touches made on the ticket.</li>
@@ -1005,10 +1005,10 @@ if(DEMO.init) DEMO.init();
               <tr><th>Line of Business (LOB)</th><th>First Response SLA</th><th>First Resolve SLA</th><th>Final Resolve SLA</th></tr>
             </thead>
             <tbody>
-              <tr><td>SSO Core / IIC / MPCX / S.I.M.</td><td>&le; 8 Hours</td><td>&le; 2 Days</td><td>&le; 2 Days</td></tr>
-              <tr><td>SSO DISPUTES (SFF)</td><td>&le; 8 Hours</td><td>&le; 72 Hours</td><td>&le; 72 Hours</td></tr>
-              <tr><td>SSO Cust Returns (WFS) / Inventory MGMT</td><td>&le; 8 Hours</td><td>&le; 7 Days</td><td>&le; 7 Days</td></tr>
-              <tr><td>SSO Shipments & Fee Disputes (WFS)</td><td>&le; 8 Hours</td><td>&le; 15 Days</td><td>&le; 15 Days</td></tr>
+              <tr><td>General Support / Item Issues / Product Listings / Seller Onboarding</td><td>&le; 8 Hours</td><td>&le; 2 Days</td><td>&le; 2 Days</td></tr>
+              <tr><td>BILLING DISPUTES</td><td>&le; 8 Hours</td><td>&le; 72 Hours</td><td>&le; 72 Hours</td></tr>
+              <tr><td>Returns & Refunds / Inventory Support</td><td>&le; 8 Hours</td><td>&le; 7 Days</td><td>&le; 7 Days</td></tr>
+              <tr><td>Shipping & Fee Disputes</td><td>&le; 8 Hours</td><td>&le; 15 Days</td><td>&le; 15 Days</td></tr>
             </tbody>
           </table>
 
@@ -1028,9 +1028,9 @@ if(DEMO.init) DEMO.init();
                 <li><code>Process\Policy</code>:
                   <ul>
                     <li><em>Duplicate Case Handling Process</em>: Ticket reopened following duplicate ticket handling or merging.</li>
-                    <li><em>HR Template Used</em>: <strong>Mandatory Search Selection.</strong> Use the live search bar inside the HR Template dropdown to search and select the exact macro template name sent by the agent.</li>
-                    <li><em>UA Template Used</em>: Agent utilized an unapproved template. Strictly restricted to <strong>maximum 7 words</strong>.</li>
-                    <li><em>IRIS-GWF/Agentic AI Followed</em>: Agent followed approved AI workflows correctly, but the seller reopened. Pre-populates the required inquiry prompt as background placeholder text.</li>
+                    <li><em>Policy Template Used</em>: <strong>Mandatory Search Selection.</strong> Use the live search bar inside the Policy Template dropdown to search and select the exact macro template name sent by the agent.</li>
+                    <li><em>Escalation Template Used</em>: Agent utilized an unapproved template. Strictly restricted to <strong>maximum 7 words</strong>.</li>
+                    <li><em>Guided Workflow/AI Assistant Followed</em>: Agent followed approved AI workflows correctly, but the seller reopened. Pre-populates the required inquiry prompt as background placeholder text.</li>
                     <li><em>Other - see remark</em>: Procedural gap not listed; strictly restricted to <strong>maximum 7 words</strong>.</li>
                   </ul>
                 </li>
@@ -1041,34 +1041,34 @@ if(DEMO.init) DEMO.init();
                     <li><em>Additional clarification requested by seller</em>: Clarification sought on provided solution without disputing the outcome.</li>
                     <li><em>Dissatisfied_with_Solution</em>: <strong>Unlocks 3rd Level Detail Dropdown:</strong>
                       <ul>
-                        <li><code>DIM Dispute - Not Accept the Reimbursement Value</code>: Contests reimbursement payout for dimension adjustments.</li>
-                        <li><code>DIM - Request to verify past Historical fees</code>: Demands audit of historical monthly fees.</li>
-                        <li><code>DIM Dispute - Need Remeasured Photos from FC</code>: Demands Fulfillment Center photographic measurement proof.</li>
-                        <li><code>DIM Dispute - Not Accept the Remeasured Data</code>: Disagrees with physical remeasurement figures.</li>
-                        <li><code>IBQ Dispute - Not Accept the Reimbursement Value</code>: Contests Inbound Quality dispute compensation.</li>
-                        <li><code>IBQ Dispute - Not accepting the Overage receives</code>: Seller disputes warehouse overage counts.</li>
-                        <li><code>IBQ Dispute - 10 days dispute window</code>: Reopened due to 10-day eligibility rules.</li>
-                        <li><code>ITS Shipment - Within 10 Days</code>: Carrier transit dispute raised inside 10-day window.</li>
-                        <li><code>IBQ Dispute - 50 days dispute window</code> / <code>Refund Dispute - 45 days dispute window</code>: Disagreements over dispute window boundaries.</li>
+                        <li><code>Dimension Dispute - Not Accept the Reimbursement Value</code>: Contests reimbursement payout for dimension adjustments.</li>
+                        <li><code>Dimension - Request to verify past Historical fees</code>: Demands audit of historical monthly fees.</li>
+                        <li><code>Dimension Dispute - Need Remeasured Photos from FC</code>: Demands Fulfillment Center photographic measurement proof.</li>
+                        <li><code>Dimension Dispute - Not Accept the Remeasured Data</code>: Disagrees with physical remeasurement figures.</li>
+                        <li><code>Inbound Quantity Dispute - Not Accept the Reimbursement Value</code>: Contests Inbound Quality dispute compensation.</li>
+                        <li><code>Inbound Quantity Dispute - Not accepting the Overage receives</code>: Seller disputes warehouse overage counts.</li>
+                        <li><code>Inbound Quantity Dispute - 10 days dispute window</code>: Reopened due to 10-day eligibility rules.</li>
+                        <li><code>Inbound Shipment - Within 10 Days</code>: Carrier transit dispute raised inside 10-day window.</li>
+                        <li><code>Inbound Quantity Dispute - 50 days dispute window</code> / <code>Refund Dispute - 45 days dispute window</code>: Disagreements over dispute window boundaries.</li>
                         <li><code>Not Satisfied with Reimbursement Amount</code>: General dispute of calculated credit amount.</li>
                         <li><code>Refund Dispute -others (details see remark)</code> / <code>Other - see remark</code>: Custom dispute scenario (strictly max 7 words).</li>
                       </ul>
                     </li>
                     <li><em>Dissatisfied_with_Process_Policy</em>: <strong>Unlocks 3rd Level Detail Dropdown:</strong>
                       <ul>
-                        <li><code>Buy Box Loss</code>: Reopened protesting Buy Box suppression.</li>
+                        <li><code>Featured Offer Loss</code>: Reopened protesting loss of the featured offer.</li>
                         <li><code>Negative Reviews - Not meeting criteria</code>: Review removal requests that fail policy criteria.</li>
                         <li><code>Negative Reviews - logistics/ shipping issues</code>: Review removal requests tied to courier delays.</li>
                         <li><code>Restricted sale for international sellers</code>: Contesting cross-border seller limitations.</li>
-                        <li><code>Sellers can't cancel the WFS Order</code>: Demanding manual order cancellation outside policy.</li>
-                        <li><code>Sellers can't change the product ID for WFS Item</code>: Contesting product ID lockdown rules.</li>
+                        <li><code>Sellers can't cancel the Fulfillment Order</code>: Demanding manual order cancellation outside policy.</li>
+                        <li><code>Sellers can't change the product ID for Fulfillment Item</code>: Contesting product ID lockdown rules.</li>
                         <li><code>Duplicate variants found despite seller claim</code>: Policy enforcement disputes.</li>
                       </ul>
                     </li>
                     <li><em>Dissactified_with_being_referred_to_3rd_party</em>: <strong>Unlocks 3rd Level Detail Dropdown:</strong>
                       <ul>
                         <li><code>Refered to Carrier For shipment missing</code>: Unhappy with courier redirection.</li>
-                        <li><code>Refered to CCA for refund/cancel/late order</code>: Unhappy with Customer Care redirection.</li>
+                        <li><code>Refered to Customer Care for refund/cancel/late order</code>: Unhappy with Customer Care redirection.</li>
                         <li><code>Refered to Account Manager - Event</code>: Protesting account management escalation rules.</li>
                       </ul>
                     </li>
@@ -1114,12 +1114,12 @@ if(DEMO.init) DEMO.init();
                 </li>
                 <li>If <strong>Escalated to External Team</strong> is chosen, select the target partner queue:
                   <ul>
-                    <li><code>Escalated to Fixit</code>, <code>Escalated to TechOps JIRA</code>, <code>Escalated to Production JIRA</code>, <code>Escalated to Canada Service Now</code>, <code>Escalated to ITS Request</code>, <code>Escalated to SSS Opt Out</code>, <code>Escalated to Strikethrough</code>, <code>Escalated to Slack</code>, <code>Escalated to Outlook</code>, or <code>Escalated to Team</code>.</li>
+                    <li><code>Escalated to Tech Support</code>, <code>Escalated to TechOps JIRA</code>, <code>Escalated to Production JIRA</code>, <code>Escalated to Regional Service Desk</code>, <code>Escalated to IT Service Request</code>, <code>Escalated to Program Opt-out</code>, <code>Escalated to Pricing Support</code>, <code>Escalated to Slack</code>, <code>Escalated to Outlook</code>, or <code>Escalated to Team</code>.</li>
                   </ul>
                 </li>
                 <li>If <strong>Incorrect/Partial Resolution Provided</strong> is chosen:
                   <ul>
-                    <li>Select <code>Acuitty Agent Fault</code> or <code>Non-Acuitty Agent Fault</code>.</li>
+                    <li>Select <code>In-house Agent Fault</code> or <code>External Team Agent Fault</code>.</li>
                   </ul>
                 </li>
               </ul>
@@ -1144,13 +1144,13 @@ if(DEMO.init) DEMO.init();
             <li><strong>Agent Fault:</strong> Must be marked <code>Yes</code> if the assigned associate caused the breach through inaction or failing to follow verify-status timelines, or <code>No</code> if breach occurred prior to queue intake or due to external bottlenecks.</li>
           </ul>
 
-          <p class="font-weight-bold text-primary mb-1">E. ADR & AHT Queue Dropdowns</p>
+          <p class="font-weight-bold text-primary mb-1">E. Resolution Delay & AHT Queue Dropdowns</p>
           <ul>
             <li><strong>Reason:</strong> Choose between:
               <ul>
                 <li><code>Agent error - Delay in Response</code> / <code>Agent error - Unnecessary Handling</code></li>
                 <li><code>Agent error - Incorrect Handling</code></li>
-                <li><code>Escalated to External Team</code> (Unlocks Sub-Reason: Canada Service now, IRIS, ITS Request, Outlook, Pricing Anamoly, Production JIRA, Review Refresh, SFS Team, SSS Optout, Strikethrough, Supervisor Escalation, Techops JIRA, UGC)</li>
+                <li><code>Escalated to External Team</code> (Unlocks Sub-Reason: Regional Service Desk, Guided Workflow, IT Service Request, Outlook, Pricing Anomaly, Production JIRA, Content Refresh, Fulfillment Team, Program Opt-out, Pricing Support, Supervisor Escalation, Techops JIRA, Content Moderation)</li>
                 <li><code>Handled by another queue initially</code> / <code>Stucked in Another Queue</code></li>
                 <li><code>Seller - Cross Question</code></li>
               </ul>
@@ -1158,7 +1158,7 @@ if(DEMO.init) DEMO.init();
             <li><strong>Queue Routing Tracking:</strong> Record the exact <em>Previous Queue Name</em>, <em>Previous Queue assigned date</em>, and <em>Latest assignment date to Main queue</em> to establish operational delay timelines.</li>
           </ul>
 
-          <p class="font-weight-bold text-primary mb-1">F. Need Info Abandoned Dropdowns</p>
+          <p class="font-weight-bold text-primary mb-1">F. Info Request Abandoned Dropdowns</p>
           <ul>
             <li><strong>What was required?:</strong> Identify what the agent requested prior to abandonment:
               <ul>
@@ -1168,7 +1168,7 @@ if(DEMO.init) DEMO.init();
             <li><strong>Agent Fault:</strong> Flag <code>Yes</code> if associate requested redundant details or closed prematurely; flag <code>No</code> if the associate followed SOP.</li>
           </ul>
 
-          <p class="font-weight-bold text-primary mb-1">G. BPO Coaching Dropdowns</p>
+          <p class="font-weight-bold text-primary mb-1">G. Escalation Review Dropdowns</p>
           <ul>
             <li><strong>Escalation Validity:</strong> Choose <code>VALID</code> or <code>INVALID</code>. If marked <strong>INVALID</strong>, you must fill out the <strong>Challenging Note</strong> detailing the SOP contradiction.</li>
           </ul>
@@ -1222,10 +1222,10 @@ if(DEMO.init) DEMO.init();
             </tr>
           </thead>
           <tbody>
-            <tr><td>SSO Core / IIC / MPCX / S.I.M.</td><td>&le; 8h</td><td>&le; 2 days</td><td>&le; 2 days</td></tr>
-            <tr><td>SSO DISPUTES (SFF)</td><td>&le; 8h</td><td>&le; 72h</td><td>&le; 72h</td></tr>
-            <tr><td>SSO Cust Returns (WFS) / Inventory MGMT</td><td>&le; 8h</td><td>&le; 7 days</td><td>&le; 7 days</td></tr>
-            <tr><td>SSO Shipments & Fee Disputes (WFS)</td><td>&le; 8h</td><td>&le; 15 days</td><td>&le; 15 days</td></tr>
+            <tr><td>General Support / Item Issues / Product Listings / Seller Onboarding</td><td>&le; 8h</td><td>&le; 2 days</td><td>&le; 2 days</td></tr>
+            <tr><td>BILLING DISPUTES</td><td>&le; 8h</td><td>&le; 72h</td><td>&le; 72h</td></tr>
+            <tr><td>Returns & Refunds / Inventory Support</td><td>&le; 8h</td><td>&le; 7 days</td><td>&le; 7 days</td></tr>
+            <tr><td>Shipping & Fee Disputes</td><td>&le; 8h</td><td>&le; 15 days</td><td>&le; 15 days</td></tr>
           </tbody>
         </table>
       </div>
@@ -1717,7 +1717,7 @@ const questions = [
   "Did the associate acknowledge the reopen reason?",
   "Did the associate correctly transfer the case?",
   "Did the associate send the C -SAT survey, If required?",
-  "Did the associate use the HR/UA template when required?",
+  "Did the associate use the Policy/Escalation template when required?",
   "Did the associate answer all the questions?",
   "Was the root cause acknowledged?",
   "Did the associate update the case status correctly?",
@@ -1727,7 +1727,7 @@ const questions = [
   "Was the correct case category (L1,L2,L3,L4) selected?",
   "Was the case handled efficiently and within expected AAT/AHT guidelines",
   "Did the associate provide the resolution before crossing out the case?",
-  "Did the associate followed IRIS GWF/ Agentic AI",
+  "Did the associate followed Guided Workflow Guided Workflow/ AI Assistant",
   "Did the associate prevent from disclosing internal information to the seller",
   "Was the operating behavior correct?"
 ];
@@ -1946,7 +1946,7 @@ function getActiveCoachingElement() {
     return document.getElementById('coachingDetails');
   } else if (currentQueue === 'CSAT') {
     return document.getElementById('csatCoachingNote');
-  } else if (currentQueue === 'BPO Coaching') {
+  } else if (currentQueue === 'Escalation Review') {
     return document.getElementById('auditorNote');
   }
   return null;
@@ -2117,7 +2117,7 @@ function onQueueChange() {
     slaTableContainer.style.display = 'block';
     touchContainer.style.display = 'none';
     caseAcceptContainer.style.display = 'none';
-  } else if (['Need Info Abandoned', 'ADR', 'AHT'].includes(currentQueue)) {
+  } else if (['Info Request Abandoned', 'Resolution Delay', 'AHT'].includes(currentQueue)) {
     touchContainer.style.display = 'none';
     caseAcceptContainer.style.display = 'none';
   } else {
@@ -2125,7 +2125,7 @@ function onQueueChange() {
     caseAcceptContainer.style.display = 'block';
   }
 
-  const scoringQueues = ['Reopen', 'FCR', 'General Audit', 'CSAT', 'BPO Coaching'];
+  const scoringQueues = ['Reopen', 'FCR', 'General Audit', 'CSAT', 'Escalation Review'];
   const isScoring = scoringQueues.includes(currentQueue);
   checklistCard.style.display = isScoring ? 'block' : 'none';
   if (checklistPrompt) checklistPrompt.style.display = isScoring ? 'block' : 'none';
@@ -2166,7 +2166,7 @@ function onQueueChange() {
     configureGuardDropdown('errorType', ['Policy', 'System', 'Agent'], '', onErrorTypeChange);
     configureGuardDropdown('csatAuditStatus', ['Valid', 'Invalid'], '', onCSATAuditStatusChange);
     lockGuardDropdown('csatAuditStatus', true);
-  } else if (currentQueue === 'BPO Coaching') {
+  } else if (currentQueue === 'Escalation Review') {
     bpocExtraFields.style.display = 'block';
     catHashRow.style.display = 'none';
     loadDiagnosticSection(currentQueue);
@@ -2250,12 +2250,12 @@ function onReopenSubChange(subVal) {
       lockGuardDropdown('detailDropdown', false);
     }
 
-    if (subVal === 'HR Template Used') {
-      remarkLabel.innerHTML = 'HR Template Name <span class="text-danger">*</span>';
+    if (subVal === 'Policy Template Used') {
+      remarkLabel.innerHTML = 'Policy Template Name <span class="text-danger">*</span>';
       remarkContainer.innerHTML = `
         <div class="guard-select-box" id="box_rootCauseRemark">
           <input type="hidden" id="rootCauseRemark" value="">
-          <div class="guard-trigger" onclick="toggleGuardDropdown('rootCauseRemark', event)">-- Select HR Template --</div>
+          <div class="guard-trigger" onclick="toggleGuardDropdown('rootCauseRemark', event)">-- Select Policy Template --</div>
           <div class="guard-menu" id="menu_rootCauseRemark" style="padding-top: 0;">
             <div class="p-1 border-bottom sticky-top bg-white" onclick="event.stopPropagation();">
               <input type="text" id="hrTemplateSearchInput" class="form-control form-control-sm" placeholder="Search template..." oninput="filterHRTemplateOptions(this.value)" autocomplete="off">
@@ -2265,13 +2265,13 @@ function onReopenSubChange(subVal) {
         </div>`;
       remarkRow.style.display = 'block';
       renderHRTemplateList(hrTemplateNamesMaster);
-    } else if (subVal === 'IRIS-GWF/Agentic AI Followed') {
+    } else if (subVal === 'Guided Workflow/AI Assistant Followed') {
       remarkLabel.innerHTML = 'Remark (Other) <span class="text-danger">*</span>';
       remarkContainer.innerHTML = `<textarea id="rootCauseRemark" class="form-control stretchable" rows="2" oninput="handleRemarkWordLimit(this)" placeholder="Required (Max 7 words)..."></textarea>`;
       remarkRow.style.display = 'block';
       const remarkElem = document.getElementById('rootCauseRemark');
       if (remarkElem) remarkElem.focus();
-    } else if (['Other - see remark', 'UA Template Used'].includes(subVal)) {
+    } else if (['Other - see remark', 'Escalation Template Used'].includes(subVal)) {
       remarkLabel.innerHTML = 'Remark (Other) <span class="text-danger">*</span> <small class="text-muted font-weight-normal">(Max 7 words)</small>';
       remarkContainer.innerHTML = `<textarea id="rootCauseRemark" class="form-control stretchable" rows="2" oninput="handleRemarkWordLimit(this)" placeholder="Required (Max 7 words)..."></textarea>`;
       remarkRow.style.display = 'block';
@@ -2475,7 +2475,7 @@ function onCSATAuditStatusChange(val) {
 function loadDiagnosticSection(queue) {
   const section = document.getElementById('diagnosticSection');
 
-  if (queue === 'Need Info Abandoned') {
+  if (queue === 'Info Request Abandoned') {
     google.script.run.withSuccessHandler(function(options) {
       section.innerHTML = `
         <div class="form-row">
@@ -2505,8 +2505,8 @@ function loadDiagnosticSection(queue) {
       });
       configureGuardDropdown('agentFault', ['Yes', 'No'], '', null);
     }).getNeedInfoRequiredOptions();
-  } else if (queue === 'ADR' || queue === 'AHT') {
-    const fetchFunc = queue === 'ADR' ? 'getADRReasonOptions' : 'getAHTReasonOptions';
+  } else if (queue === 'Resolution Delay' || queue === 'AHT') {
+    const fetchFunc = queue === 'Resolution Delay' ? 'getADRReasonOptions' : 'getAHTReasonOptions';
     google.script.run.withSuccessHandler(function(reasons) {
       section.innerHTML = `
         <div class="form-row">
@@ -2635,7 +2635,7 @@ function loadDiagnosticSection(queue) {
         <label class="field-tag">Case Details / Diagnostic Remarks Summary <span class="text-danger">*</span></label>
         <textarea id="diagRemarks" class="form-control stretchable" rows="2" placeholder="Required..."></textarea>
       </div>`;
-  } else if (queue === 'BPO Coaching') {
+  } else if (queue === 'Escalation Review') {
     section.innerHTML = `
       <div class="form-row">
         <div class="col-md-6 form-group mb-1">
@@ -2687,7 +2687,7 @@ function fetchCase() {
       document.getElementById('fetchStatus').innerText = '';
       document.getElementById('caseNumber').value = data.caseNumber;
       
-      if (['CSAT', 'BPO Coaching', 'Need Info Abandoned', 'ADR', 'AHT'].includes(currentQueue)) {
+      if (['CSAT', 'Escalation Review', 'Info Request Abandoned', 'Resolution Delay', 'AHT'].includes(currentQueue)) {
         document.getElementById('agentName').value = data.agentSalesforceName || '';
         document.getElementById('agentName').readOnly = true;
       } else {
@@ -2777,7 +2777,7 @@ function submitAudit() {
   }
 
   const touchCounter = document.getElementById('touchCounter').value;
-  const exemptFromTouchAndAccept = currentQueue.startsWith('SLA_') || ['Need Info Abandoned', 'ADR', 'AHT'].includes(currentQueue);
+  const exemptFromTouchAndAccept = currentQueue.startsWith('SLA_') || ['Info Request Abandoned', 'Resolution Delay', 'AHT'].includes(currentQueue);
 
   if (!exemptFromTouchAndAccept && (touchCounter === '' || touchCounter === null)) {
     alert('Touch Counter is required.'); return;
@@ -2808,7 +2808,7 @@ function submitAudit() {
   let hasDefectFound = false;
   const defectQuestionNumbers = [];
 
-  if (['Reopen', 'FCR', 'General Audit', 'CSAT', 'BPO Coaching'].includes(currentQueue)) {
+  if (['Reopen', 'FCR', 'General Audit', 'CSAT', 'Escalation Review'].includes(currentQueue)) {
     for (let i = 1; i <= 19; i++) {
       const v = document.getElementById('q' + i).value;
       if (!v) { alert(`Answer question ${i} in sequence.`); return; }
@@ -2820,7 +2820,7 @@ function submitAudit() {
     }
   }
 
-  if (currentQueue === 'Need Info Abandoned') {
+  if (currentQueue === 'Info Request Abandoned') {
     formData.niaWeek = document.getElementById('niaWeek').value;
     formData.niaAbandonedVal = document.getElementById('niaAbandonedVal').value;
 
@@ -2836,7 +2836,7 @@ function submitAudit() {
       document.getElementById('diagRemarks').focus();
       return; 
     }
-  } else if (currentQueue === 'ADR' || currentQueue === 'AHT') {
+  } else if (currentQueue === 'Resolution Delay' || currentQueue === 'AHT') {
     formData.niaWeek = document.getElementById('niaWeek').value;
     formData.niaAbandonedVal = 'N/A';
 
@@ -2887,11 +2887,11 @@ function submitAudit() {
       formData.rootCauseRemark = remarkElem.value.trim();
       
       if (!formData.rootCauseRemark) { 
-        alert(formData.subcategory === 'HR Template Used' ? 'Please select an HR Template.' : 'Remark is required.'); 
+        alert(formData.subcategory === 'Policy Template Used' ? 'Please select an Policy Template.' : 'Remark is required.'); 
         return; 
       }
 
-      const isOtherRemark = ['Other - see remark', 'UA Template Used'].includes(formData.subcategory) ||
+      const isOtherRemark = ['Other - see remark', 'Escalation Template Used'].includes(formData.subcategory) ||
                             formData.detail === 'Other - see remark' ||
                             formData.detail === 'Refund Dispute -others (details see remark)';
       if (isOtherRemark && countWords(formData.rootCauseRemark) > 7) {
@@ -3007,7 +3007,7 @@ function submitAudit() {
 
     formData.diagnosticRemarks = document.getElementById('diagRemarks').value.trim();
     if (!formData.diagnosticRemarks) { alert('Diagnostic Remarks are required.'); return; }
-  } else if (currentQueue === 'BPO Coaching') {
+  } else if (currentQueue === 'Escalation Review') {
     formData.bpocDescription = document.getElementById('bpocDescription').value;
     formData.bpocHandling = document.getElementById('bpocHandling').value;
     formData.bpocJira = document.getElementById('bpocJira').value;

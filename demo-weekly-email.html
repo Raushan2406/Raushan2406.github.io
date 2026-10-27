@@ -23,13 +23,13 @@ DEMO.server=(function(){
  * ============================================================================
  * DAILY TARGETS (480-minute shift)
  * ============================================================================
- * Main audits (FCR, Reopen, CSAT, BPO Coaching, General Audit) are counted
+ * Main audits (FCR, Reopen, CSAT, Escalation Review, General Audit) are counted
  * against the auditor's LOB daily case target.
- * Sub-audits (SLA, Need Info Abandoned, ADR, AHT) carry a fixed benchmark in
+ * Sub-audits (SLA, Info Request Abandoned, Resolution Delay, AHT) carry a fixed benchmark in
  * minutes per case.
  *
  * Everything is converted to "credited minutes" so mixed work is comparable:
- *   main audit case  -> 480 / LOB daily target   (e.g. SSO MPCX: 480/27 = 17.8 min)
+ *   main audit case  -> 480 / LOB daily target   (e.g. Product Listings: 480/27 = 17.8 min)
  *   sub-audit case   -> its benchmark minutes     (e.g. SLA First Response: 5 min)
  * A day is MET when credited minutes >= 480 (= 100% of the LOB target).
  */
@@ -38,25 +38,24 @@ var DEFAULT_LOB_TARGET = 25;
 
 // Keys are normalized LOB names (lowercase, letters/digits only)
 var LOB_TARGETS = {
-  "ssodisputessff": 40,                 // SSO Disputes (SFF)
-  "ssocustreturnswfs": 32,              // Customer Return (WFS)
-  "customerreturn": 32,
-  "ssompcx": 27,                        // SSO MPCX
-  "ssoinventorymgmt": 25,               // SSO Inventory MGMT
-  "ssosim": 25,                         // SSO S.I.M.
-  "ssoiic": 25,                         // SSO IIC
-  "ssocore": 24,                        // SSO Core
-  "ssoshipmentsfeedisputeswfs": 22,     // SSO Disputes (WFS)
-  "ssodisputeswfs": 22
+  "billingdisputes": 40,
+  "returnsrefunds": 32,
+  "productlistings": 27,
+  "inventorysupport": 25,
+  "selleronboarding": 25,
+  "itemissues": 25,
+  "generalsupport": 24,
+  "orderdisputes": 22,
+  "shippingfeedisputes": 22
 };
 
 // Keys are normalized Source_Sheet names; value = benchmark minutes per case
 var SUB_AUDIT_MINUTES = {
   "slafirstresponse": 5,
-  "needinfoabandoned": 5,
+  "inforequestabandoned": 5,
   "slafirstresolve": 8,
   "slafinalresolve": 8,
-  "adr": 10,
+  "resolutiondelay": 10,
   "aht": 10
 };
 
@@ -86,12 +85,12 @@ function isSubAudit(auditCode) {
 }
 
 /**
- * Calculates the previous Walmart Fiscal Week Number.
- * Walmart Fiscal Year begins on the Saturday containing Feb 1.
+ * Calculates the previous Fiscal Week Number.
+ * Fiscal Year begins on the Saturday containing Feb 1.
  * For FY2027 (2026-2027), Week 1 started on Saturday, Jan 31, 2026.
  * Target for Monday, Aug 31, 2026 is Week 30 (Aug 22 - Aug 28).
  */
-function getPreviousWalmartWeekNumber() {
+function getPreviousClientWeekNumber() {
   var d = new Date();
   // Go back 7 days to get a date inside the target previous week
   d.setDate(d.getDate() - 7);
@@ -212,8 +211,8 @@ function runWeeklyReport() {
  */
 function sendWeeklyAuditorEmails() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  // Consolidated data from all audit tabs (FCR, Reopen, CSAT, BPO Coaching,
-  // AHT, ADR, Need Info Abandoned, SLA First Response / Final Resolve / First Resolve)
+  // Consolidated data from all audit tabs (FCR, Reopen, CSAT, Escalation Review,
+  // AHT, Resolution Delay, Info Request Abandoned, SLA First Response / Final Resolve / First Resolve)
   var sheet = ss.getSheetByName('Analyze_Data_Sources') || ss.getSheetByName('Summary_Data') || ss.getSheets()[0];
 
   var lastRow = sheet.getLastRow();
@@ -228,8 +227,8 @@ function sendWeeklyAuditorEmails() {
   // Week-off schedule per auditor (Roster tab, see 4_Roster.gs)
   var rosterMap = loadRosterSchedules(ss);
 
-  // Automatically targets previous Walmart Fiscal Week (Returns "30" for Aug 31, 2026)
-  var TARGET_WEEK = getPreviousWalmartWeekNumber(); 
+  // Automatically targets previous Fiscal Week (Returns "30" for Aug 31, 2026)
+  var TARGET_WEEK = getPreviousClientWeekNumber(); 
   var RECENT_CUTOFF_MS = Date.now() - 21 * 24 * 60 * 60 * 1000;
 
 
@@ -263,11 +262,11 @@ function sendWeeklyAuditorEmails() {
     var auditorName = row[2] ? row[2].toString().trim() : 'Auditor';
     var auditCode = row[3] ? row[3].toString().trim() : 'FCR';
     var caseNumber = normalizeCase(row[4]);
-    var caseLob = row[6] ? row[6].toString().trim() : 'SSO MPCX';
+    var caseLob = row[6] ? row[6].toString().trim() : 'Product Listings';
     var creditMins = getCaseCreditMinutes(auditCode, caseLob);
 
     var isDispute = caseNumber !== '' && validDisputeCases[caseNumber] === true;
-    // AHT / ADR / Need Info / SLA audits have no score -> null (excluded from score averages)
+    // AHT / Resolution Delay / Awaiting Info / SLA audits have no score -> null (excluded from score averages)
     var hasScore = row[7] !== '' && row[7] !== null && row[7] !== undefined;
     var qualityScore = hasScore ? parseNumeric(row[7]) : null;
     var rawStart = row[8] ? row[8].toString().trim() : '';
@@ -317,7 +316,7 @@ function sendWeeklyAuditorEmails() {
 
   var auditorKeys = Object.keys(auditorsData);
   if (auditorKeys.length === 0) {
-    Logger.log("No matching records found for Walmart Week " + TARGET_WEEK);
+    Logger.log("No matching records found for Fiscal Week " + TARGET_WEEK);
     return;
   }
 
@@ -423,7 +422,7 @@ function sendWeeklyAuditorEmails() {
     // In test mode, email goes to MY_TEST_EMAIL with no CC
     var recipientTo = IS_TEST_RUN ? MY_TEST_EMAIL : auditor.email;
     var recipientCc = IS_TEST_RUN ? "" : "lead.one@demo-qa.com, lead.two@demo-qa.com, qa.team@demo-qa.com";
-    var emailSubject = (IS_TEST_RUN ? "[TEST ONLY] " : "") + "QA Weekly Performance Report - Walmart Week " + auditor.week + " (" + auditor.name + ")";
+    var emailSubject = (IS_TEST_RUN ? "[TEST ONLY] " : "") + "QA Weekly Performance Report - Fiscal Week " + auditor.week + " (" + auditor.name + ")";
 
     MailApp.sendEmail({
       to: recipientTo,
@@ -440,7 +439,7 @@ function sendWeeklyAuditorEmails() {
     MailApp.sendEmail({
       to: IS_TEST_RUN ? MY_TEST_EMAIL : MANAGER_EMAILS,
       cc: IS_TEST_RUN ? "" : MANAGER_CC,
-      subject: (IS_TEST_RUN ? "[TEST ONLY] " : "") + "QA Team Weekly Report (Red / Yellow / Green) - Walmart Week " + TARGET_WEEK,
+      subject: (IS_TEST_RUN ? "[TEST ONLY] " : "") + "QA Team Weekly Report (Red / Yellow / Green) - Fiscal Week " + TARGET_WEEK,
       htmlBody: managerHtml,
       name : "Raushan Kumar"
     });
@@ -451,7 +450,7 @@ function sendWeeklyAuditorEmails() {
  * Builds Email HTML Body with Auto-Fitting Layout including Saturday and Sunday
  */
 function buildFullWidthEmailHtml(auditor, topPerformer) {
-  // Walmart Fiscal Week runs Saturday through Friday
+  // Fiscal Week runs Saturday through Friday
   // Day order follows the auditor's own cycle: week-off days first, then working days
   // (Sat+Sun WO -> Sat..Fri as before; Sun+Mon WO -> Sun, Mon, Tue..Sat)
   var sched = auditor.schedule || DEFAULT_SCHEDULE;
@@ -664,7 +663,7 @@ function buildFullWidthEmailHtml(auditor, topPerformer) {
     }
   });
 
-  // Per audit type summary rows (FCR, Reopen, CSAT, AHT, ADR, SLA..., etc.)
+  // Per audit type summary rows (FCR, Reopen, CSAT, AHT, Resolution Delay, SLA..., etc.)
   var typeOrder = Object.keys(typeMap).sort(function(a, b) { return typeMap[b].cases - typeMap[a].cases; });
   var typeRowsHtml = "";
   typeOrder.forEach(function(code) {
@@ -694,7 +693,7 @@ function buildFullWidthEmailHtml(auditor, topPerformer) {
       
       <p style="font-size: 13px; margin-top: 0; color: #0f172a;">Hi <strong>${auditor.name}</strong>,</p>
       <p style="font-size: 13.5px; color: #334155; margin-bottom: 16px;">
-        Below is your complete performance and occupancy summary for <strong>Walmart Week ${auditor.week}</strong> (${auditor.lob}):
+        Below is your complete performance and occupancy summary for <strong>Fiscal Week ${auditor.week}</strong> (${auditor.lob}):
       </p>
 
       <!-- HIGHLIGHTS GRID -->
@@ -706,7 +705,7 @@ function buildFullWidthEmailHtml(auditor, topPerformer) {
           <tr>
             <td style="padding: 4px 8px; width: 33%;"><strong>Auditor LOB:</strong> ${auditor.lob}</td>
             <td style="padding: 4px 8px; width: 33%;"><strong>Daily Case Target:</strong> ${dailyTargetCases} cases/day</td>
-            <td style="padding: 4px 8px; width: 34%;"><strong>Walmart Week:</strong> ${auditor.week}</td>
+            <td style="padding: 4px 8px; width: 34%;"><strong>Fiscal Week:</strong> ${auditor.week}</td>
           </tr>
           <tr>
             <td style="padding: 4px 8px;"><strong>Shift:</strong> ${sched.shiftLabel}</td>
@@ -750,9 +749,9 @@ function buildFullWidthEmailHtml(auditor, topPerformer) {
         <div style="color: #92400e; font-weight: 800; font-size: 13px;">⚠️ Daily Target Requirement</div>
         <div style="color: #334155; font-size: 12.5px; margin-top: 2px;">
           For <strong>${auditor.lob}</strong>, your required daily target is <strong>${dailyTargetCases} cases/day</strong> (based on full-shift 480 minute capacity).
-          FCR / Reopen / CSAT / BPO Coaching / General audits count as 1 case each (${minsPerMainCase.toFixed(1)} min credit).
-          Sub-audits are credited at their benchmark: <strong>SLA First Response 5 min</strong>, <strong>Need Info Abandoned 5 min</strong>,
-          <strong>SLA First Resolve 8 min</strong>, <strong>SLA Final Resolve 8 min</strong>, <strong>ADR 10 min</strong>, <strong>AHT 10 min</strong>.
+          FCR / Reopen / CSAT / Escalation Review / General audits count as 1 case each (${minsPerMainCase.toFixed(1)} min credit).
+          Sub-audits are credited at their benchmark: <strong>SLA First Response 5 min</strong>, <strong>Info Request Abandoned 5 min</strong>,
+          <strong>SLA First Resolve 8 min</strong>, <strong>SLA Final Resolve 8 min</strong>, <strong>Resolution Delay 10 min</strong>, <strong>AHT 10 min</strong>.
           A day is <strong>MET</strong> when total credit reaches 480 minutes (shown as equivalent cases).
         </div>
       </div>
@@ -777,7 +776,7 @@ function buildFullWidthEmailHtml(auditor, topPerformer) {
           ${typeRowsHtml}
         </tbody>
       </table>
-      <p style="font-size: 11px; color: #64748b; margin: -12px 0 18px 0;">Avg Score shows N/A for audit types that are not scored (AHT, ADR, Need Info Abandoned, SLA audits).</p>
+      <p style="font-size: 11px; color: #64748b; margin: -12px 0 18px 0;">Avg Score shows N/A for audit types that are not scored (AHT, Resolution Delay, Info Request Abandoned, SLA audits).</p>
 
       <!-- DAILY BREAKDOWN TABLE -->
       <h3 style="margin: 0 0 10px 0; font-size: 14px; color: #1e3a8a; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 800;">
@@ -853,14 +852,14 @@ function buildFullWidthEmailHtml(auditor, topPerformer) {
  * ============================================================================
  * ROSTER-BASED WEEK MAPPING
  * ============================================================================
- * Walmart weeks run Saturday -> Friday. An auditor whose week-off is not
+ * Fiscal weeks run Saturday -> Friday. An auditor whose week-off is not
  * Sat+Sun (e.g. Sun+Mon WO, working Tue -> Sat) would otherwise have their
  * Saturday counted in the NEXT week.
  *
  * Rule used: each auditor's "work cycle" = their week-off block followed by
  * their working days (e.g. Sun, Mon(WO) + Tue..Sat). The whole cycle gets
- * the Walmart week of the MIDDLE working day (Tue..Sat -> Thursday).
- *   - Sat+Sun WO (or not on roster): identical to the normal Walmart week.
+ * the fiscal week of the MIDDLE working day (Tue..Sat -> Thursday).
+ *   - Sat+Sun WO (or not on roster): identical to the normal fiscal week.
  *   - Sun+Mon WO: Saturday stays in the same week as Tue..Fri.
  *   - Audits done on a week-off day count toward the cycle that follows it.
  *
@@ -1055,7 +1054,7 @@ function walmartWeekOf(dateUtc) {
 }
 
 /**
- * Roster-adjusted Walmart week for one audit
+ * Roster-adjusted fiscal week for one audit
  */
 function getRosterWeek(startVal, sched) {
   sched = sched || DEFAULT_SCHEDULE;
@@ -1188,7 +1187,7 @@ function buildManagerTeamReportHtml(auditorsData, lobPerformers, week) {
     return '<li><strong>' + l + ':</strong> ' + (t.none ? 'No eligible QA this week' : t.name + ' (' + t.achPct.toFixed(1) + '% target achievement, ' + t.auditCount + ' audits)') + '</li>';
   }).join('');
   return '<div style="font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#0f172a;font-size:13px;">' +
-    '<p>Hi Team,</p><p>Below is the QA team summary for <strong>Walmart Week ' + week + '</strong>. Categories use regular working days only; overtime (week-off) audits are shown separately.</p>' +
+    '<p>Hi Team,</p><p>Below is the QA team summary for <strong>Fiscal Week ' + week + '</strong>. Categories use regular working days only; overtime (week-off) audits are shown separately.</p>' +
     '<table style="border-collapse:collapse;margin:10px 0 16px;"><tr>' +
     ['Green', 'Yellow', 'Red'].map(function (k) { return '<td style="padding:10px 18px;background:' + col[k][0] + ';color:' + col[k][1] + ';font-weight:800;border-radius:8px;">' + k + ': ' + counts[k] + '</td><td style="width:8px"></td>'; }).join('') +
     '</tr></table>' +
@@ -1202,10 +1201,10 @@ function getConsoleData() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var ros = ss.getSheetByName('Roster').getDataRange().getValues();
   var n = ss.getSheetByName('Analyze_Data_Sources').getLastRow() - 1;
-  return { targetWeek: getPreviousWalmartWeekNumber(), audits: n, roster: ros };
+  return { targetWeek: getPreviousClientWeekNumber(), audits: n, roster: ros };
 }
 
-;return {buildFullWidthEmailHtml:buildFullWidthEmailHtml,buildManagerTeamReportHtml:buildManagerTeamReportHtml,buildSchedule:buildSchedule,calculateMinutes:calculateMinutes,classifyShiftBucket:classifyShiftBucket,computeCutoffMin:computeCutoffMin,fetchAndConsolidateAuditData:fetchAndConsolidateAuditData,fillRosterWeeks:fillRosterWeeks,fmtScore:fmtScore,getAuditorSchedule:getAuditorSchedule,getCaseCreditMinutes:getCaseCreditMinutes,getConsoleData:getConsoleData,getIstMinuteOfDay:getIstMinuteOfDay,getPreviousWalmartWeekNumber:getPreviousWalmartWeekNumber,getRosterWeek:getRosterWeek,getShiftDateUtc:getShiftDateUtc,getTargetCasesForLob:getTargetCasesForLob,getValidDisputeCaseSet:getValidDisputeCaseSet,isSubAudit:isSubAudit,loadRosterSchedules:loadRosterSchedules,normKey:normKey,normalizeCase:normalizeCase,parseClockMinutes:parseClockMinutes,parseIsoDate:parseIsoDate,parseNumeric:parseNumeric,ragStatusFor:ragStatusFor,recalculateAllWeeks:recalculateAllWeeks,recalculateWeeksFrom:recalculateWeeksFrom,rosterNameKey:rosterNameKey,runWeeklyReport:runWeeklyReport,sendWeeklyAuditorEmails:sendWeeklyAuditorEmails,walmartWeekOf:walmartWeekOf};
+;return {buildFullWidthEmailHtml:buildFullWidthEmailHtml,buildManagerTeamReportHtml:buildManagerTeamReportHtml,buildSchedule:buildSchedule,calculateMinutes:calculateMinutes,classifyShiftBucket:classifyShiftBucket,computeCutoffMin:computeCutoffMin,fetchAndConsolidateAuditData:fetchAndConsolidateAuditData,fillRosterWeeks:fillRosterWeeks,fmtScore:fmtScore,getAuditorSchedule:getAuditorSchedule,getCaseCreditMinutes:getCaseCreditMinutes,getConsoleData:getConsoleData,getIstMinuteOfDay:getIstMinuteOfDay,getPreviousClientWeekNumber:getPreviousClientWeekNumber,getRosterWeek:getRosterWeek,getShiftDateUtc:getShiftDateUtc,getTargetCasesForLob:getTargetCasesForLob,getValidDisputeCaseSet:getValidDisputeCaseSet,isSubAudit:isSubAudit,loadRosterSchedules:loadRosterSchedules,normKey:normKey,normalizeCase:normalizeCase,parseClockMinutes:parseClockMinutes,parseIsoDate:parseIsoDate,parseNumeric:parseNumeric,ragStatusFor:ragStatusFor,recalculateAllWeeks:recalculateAllWeeks,recalculateWeeksFrom:recalculateWeeksFrom,rosterNameKey:rosterNameKey,runWeeklyReport:runWeeklyReport,sendWeeklyAuditorEmails:sendWeeklyAuditorEmails,walmartWeekOf:walmartWeekOf};
 })();
 if(DEMO.init) DEMO.init();
 </script>
@@ -1238,7 +1237,7 @@ ol{margin:6px 0 0;padding-left:20px;color:var(--muted)}li{margin:3px 0}
       <div class="k"><span>Emails per run</span><b id="kMail">–</b></div>
     </div>
     <p style="margin:14px 0 6px;color:var(--muted)">What one run does:</p>
-    <ol><li>Recalculates each audit's Walmart week from the roster (week-offs and night shifts).</li><li>Builds each QA's weekly report: daily breakdown, audit types, target achievement, disputes, overtime.</li><li>Picks the top performer per LOB and sends every QA their email (CC leads).</li><li>Sends the manager the Red / Yellow / Green team report.</li></ol>
+    <ol><li>Recalculates each audit's fiscal week from the roster (week-offs and night shifts).</li><li>Builds each QA's weekly report: daily breakdown, audit types, target achievement, disputes, overtime.</li><li>Picks the top performer per LOB and sends every QA their email (CC leads).</li><li>Sends the manager the Red / Yellow / Green team report.</li></ol>
     <p style="margin-top:14px"><button class="run" id="runBtn" type="button">▶ Run Monday report now</button></p>
     <div id="log"></div>
   </div>

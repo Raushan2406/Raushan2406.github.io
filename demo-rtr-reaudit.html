@@ -2,23 +2,23 @@
 <html>
 <head>
 <meta charset="utf-8">
-<script>window.DEMO={"user": "aarav.mehta@demo-qa.com", "roles": [{"label": "View as QA: Aarav Mehta", "email": "aarav.mehta@demo-qa.com"}, {"label": "View as QA: Priya Nair", "email": "priya.nair@demo-qa.com"}, {"label": "View as Admin: Raushan Kumar", "email": "raushan.kumar@demo-qa.com"}], "intro": "QA view: open a pending case and re-audit it. Switch to \"Admin\" at the bottom-left to assign cases, see variance and send emails. Admin PIN: 2468", "back": "index.html#work"};</script>
+<script>window.DEMO={"user": "aarav.mehta@demo-qa.com", "roles": [{"label": "View as QA: Aarav Mehta", "email": "aarav.mehta@demo-qa.com"}, {"label": "View as QA: Priya Nair", "email": "priya.nair@demo-qa.com"}], "intro": "QA view: open a pending case and re-audit it. Click \"Admin\" at the top to see the lead tools (demo PIN: 2468).", "back": "index.html#work"};</script>
 <script src="demo-data.js"></script>
 <script src="gas-emu.js"></script>
 <script>
 (function(){
 var D=DEMODATA, R=D.rng(55);
-var P=['Case Handled Correctly','Internal Article Used','Correct External Article & Self-Serve Options','Reopen Reason Acknowledged','Case Transferred Correctly','CSAT Survey Sent If Required','HR/UA Template Used If Required','All Questions Answered','Root Cause Acknowledged','Case Status Updated Correctly','Internal Case Comment Written Correctly','Professional & Respectful Interaction','Correct Email Formatting & Spelling','Correct Case Category (L1/L2/L3/L4)','AAT/AHT Guidelines Followed','Resolution Provided Before Crossing Out Case','IRIS GWF/Agentic AI Followed','No Internal Information Disclosed to Seller','Correct Operating Behavior'];
+var P=['Case Handled Correctly','Internal Article Used','Correct External Article & Self-Serve Options','Reopen Reason Acknowledged','Case Transferred Correctly','CSAT Survey Sent If Required','Policy/Escalation Template Used If Required','All Questions Answered','Root Cause Acknowledged','Case Status Updated Correctly','Internal Case Comment Written Correctly','Professional & Respectful Interaction','Correct Email Formatting & Spelling','Correct Case Category (L1/L2/L3/L4)','AAT/AHT Guidelines Followed','Resolution Provided Before Crossing Out Case','Guided Workflow/AI Assistant Followed','No Internal Information Disclosed to Seller','Correct Operating Behavior'];
 var W=[10,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5], MAND=[8,9,10,11,12,13,14,15,16,18,19];
 var RC={Reopen:[['Seller','Additional clarification requested by seller',''],['Seller','Dissatisfied_with_Solution','Not Satisfied with Reimbursement Amount'],['Agent','Incorrect Resolution',''],['Agent','Agent click wrong case status',''],['System','System issue',''],['Other','Handled by Another Team','']],
-        FCR:[['Seller','Cross Question - Related to Same Issue','Asked for additional clarification'],['Agent','Incorrect/Partial Resolution Provided','Acuitty Agent Fault'],['Process/Policy','Escalated to External Team','Escalated to Fixit'],['System','Email Sent Twice',''],['AutoReply_ThankYou_Blank','Thank you','']]};
+        FCR:[['Seller','Cross Question - Related to Same Issue','Asked for additional clarification'],['Agent','Incorrect/Partial Resolution Provided','In-house Agent Fault'],['Process/Policy','Escalated to External Team','Escalated to Tech Support'],['System','Email Sent Twice',''],['AutoReply_ThankYou_Blank','Thank you','']]};
 var qas=D.QAS.slice(0,8), cn=17500000, today=D.todayIst();
 function sheet(src){
   var hdr=['Timestamp','QA_Email','Source_Sheet','Case Number','Agent_Salesforce_Name','LOB','Touch_Counter','Auditor_Name','Category_HASH'].concat(P).concat(['Total_Score_Percent','RootCause_Type','RootCause_Subcategory','RootCause_Detail','Remark','Correct_KB_Link','Diagnostic_Remarks','Coaching_Note','Case_Accept_DateTime']);
   var rows=[hdr];
   for(var i=0;i<140;i++){
     var q=qas[i%qas.length], back=1+Math.floor(R()*20), ts=new Date(today.getTime()-back*86400000+ (10+Math.floor(R()*8))*3600000);
-    var lob=(R()<.75)?q.lob:'SSO Core';
+    var lob=(R()<.75)?q.lob:'General Support';
     var ans=P.map(function(p,k){var x=R(); if(k===0) return x<q.noRate*1.3?'No':'Yes'; if(MAND.indexOf(k+1)<0 && x<0.12) return 'NA'; return x<q.noRate?'No':'Yes';});
     var e=0,t=0; ans.forEach(function(a,k){if(a!=='NA'){t+=W[k]; if(a==='Yes') e+=W[k];}}); var sc=ans[0]==='No'?0:Math.round(e/t*100);
     var rc=RC[src][Math.floor(R()*RC[src].length)];
@@ -83,7 +83,7 @@ const PARAMS = [
   ['Reopen Reason Acknowledged', 'Did the associate acknowledge the reopen reason?', 5],
   ['Case Transferred Correctly', 'Did the associate correctly transfer the case?', 5],
   ['CSAT Survey Sent If Required', 'Did the associate send the C-SAT survey, if required?', 5],
-  ['HR/UA Template Used If Required', 'Did the associate use the HR/UA template when required?', 5],
+  ['Policy/Escalation Template Used If Required', 'Did the associate use the Policy/Escalation template when required?', 5],
   ['All Questions Answered', 'Did the associate answer all the questions?', 5],
   ['Root Cause Acknowledged', 'Was the root cause acknowledged?', 5],
   ['Case Status Updated Correctly', 'Did the associate update the case status correctly?', 5],
@@ -93,7 +93,7 @@ const PARAMS = [
   ['Correct Case Category (L1/L2/L3/L4)', 'Was the correct case category (L1,L2,L3,L4) selected?', 5],
   ['AAT/AHT Guidelines Followed', 'Was the case handled efficiently and within expected AAT/AHT guidelines?', 5],
   ['Resolution Provided Before Crossing Out Case', 'Did the associate provide the resolution before crossing out the case?', 5],
-  ['IRIS GWF/Agentic AI Followed', 'Did the associate follow IRIS GWF / Agentic AI?', 5],
+  ['Guided Workflow/AI Assistant Followed', 'Did the associate follow Guided Workflow / AI Assistant?', 5],
   ['No Internal Information Disclosed to Seller', 'Did the associate prevent disclosing internal information to the seller?', 5],
   ['Correct Operating Behavior', 'Was the operating behavior correct?', 5]
 ];
@@ -281,9 +281,9 @@ function getConfig_() {
 const ADMIN_ALLOWLIST = ['raushan.kumar@demo-qa.com', 'lead.one@demo-qa.com', 'lead.two@demo-qa.com'];
 // Only these accounts see and use "Send Emails" (unless EMAIL_OWNERS is filled in Reaudit_Config).
 const EMAIL_OWNER_DEFAULT = ['raushan.kumar@demo-qa.com'];
-function isAdminEmail_() { const e = me_(); return !!e && getConfig_().adminEmails.indexOf(e) > -1; }
+function isAdminEmail_() { return true; } // portfolio demo: anyone who knows the PIN can open Admin
 /** Send Emails is limited to the portal owner (the deploying account) or EMAIL_OWNERS in Reaudit_Config. */
-function canEmail_() {
+function canEmail_() { return true; // portfolio demo: emails go to the demo outbox only
   const e = me_(); if (!e) return false;
   const list = getConfig_().emailOwners.length ? getConfig_().emailOwners : EMAIL_OWNER_DEFAULT;
   return list.indexOf(e) > -1;
@@ -2991,6 +2991,61 @@ async function loadEmailHistory() {
   } catch (e) { $('eHist').innerHTML = '<tr><td colspan="6" class="text-danger p-2">' + errMsg(e) + '</td></tr>'; }
 }
 document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeOvl('detailModal'); closeOvl('pinModal'); closeOvl('mailModal'); } });
+</script>
+<style>
+#raInfo{position:fixed;inset:0;z-index:3000;background:rgba(15,23,42,.6);display:none;align-items:center;justify-content:center;padding:16px}
+#raInfo.on{display:flex}
+#raInfo .bx{background:#fff;border-radius:12px;max-width:620px;width:100%;max-height:92vh;overflow:auto;box-shadow:0 20px 60px -20px rgba(0,0,0,.6);font-size:.9rem;color:#1e293b}
+#raInfo .hd{position:sticky;top:0;z-index:1;background:#1a2332;color:#fff;padding:14px 18px;font-weight:700;font-size:1rem;display:flex;align-items:center;gap:10px;border-radius:12px 12px 0 0}
+#raInfo .bd{padding:16px 18px}
+#raInfo h6{font-size:.78rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#2563eb;margin:14px 0 6px}
+#raInfo ul{margin:0;padding-left:18px}#raInfo li{margin:3px 0}
+#raInfo .pin{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;background:#fffbeb;border:1px solid #fcd34d;border-radius:10px;padding:10px 14px;margin-top:14px}
+#raInfo .pin b{font-size:1.25rem;letter-spacing:4px;font-family:ui-monospace,Consolas,monospace}
+#raInfo .ft{display:flex;justify-content:flex-end;gap:8px;padding:0 18px 16px}
+</style>
+<div id="raInfo" role="dialog" aria-modal="true" aria-labelledby="raInfoT"><div class="bx">
+  <div class="hd" id="raInfoT"><i class="fas fa-lock"></i>Admin is locked: here is why</div>
+  <div class="bd">
+    <p class="mb-2">Admin is the QA leads' control room for re-audits. It is locked because it shows <b>every QA's scores and calibration results</b> and can change work for the whole team.</p>
+    <h6>How the lock works in the live portal</h6>
+    <ul>
+      <li>Only the portal owner and the QA leads' company accounts can open it.</li>
+      <li>They must also enter a PIN, and the server re-checks the PIN on every admin action, so the lock can't be bypassed from the browser.</li>
+      <li>Sending emails is limited further, to the portal owner only, so the team never gets duplicate or accidental emails.</li>
+    </ul>
+    <h6>Why it is protected</h6>
+    <ul>
+      <li><b>Privacy:</b> individual QA accuracy, score variance and mistakes stay visible to leads only.</li>
+      <li><b>Fair calibration:</b> QAs can't see which cases will be re-audited or how the original auditor scored them.</li>
+      <li><b>Safety:</b> bulk assignments, revokes and team emails can't be triggered by mistake.</li>
+    </ul>
+    <h6>What you can try inside</h6>
+    <ul>
+      <li>Assign re-audits: a QA re-checks their own cases (Same QA) or a peer's cases from the same LOB (Cross QA).</li>
+      <li>Track pending and completed assignments, and revoke cases.</li>
+      <li>See the variance dashboard: score gap, parameter accuracy and root-cause agreement by QA and by parameter.</li>
+      <li>Open any case to compare the original and re-audit answer by answer.</li>
+      <li>Preview and send variance emails. In this demo they go to the "Sent emails" box only.</li>
+    </ul>
+    <div class="pin"><span>This is a demo, so the PIN is shared here:</span><b>2468</b></div>
+  </div>
+  <div class="ft"><button class="btn btn-secondary btn-sm" type="button" id="raInfoNo">Stay in QA view</button><button class="btn btn-primary btn-sm" type="button" id="raInfoGo">Enter PIN <i class="fas fa-arrow-right ml-1"></i></button></div>
+</div></div>
+<script>
+(function(){
+  var orig = window.openAdmin; if (typeof orig !== 'function') return;
+  var box = document.getElementById('raInfo');
+  window.openAdmin = function(){
+    var unlocked = false; try { unlocked = !!(S && S.pin); } catch(e) {}
+    if (unlocked) return orig();
+    box.classList.add('on'); setTimeout(function(){ document.getElementById('raInfoGo').focus({preventScroll:true}); box.querySelector('.bx').scrollTop=0; }, 30);
+  };
+  document.getElementById('raInfoNo').onclick = function(){ box.classList.remove('on'); };
+  document.getElementById('raInfoGo').onclick = function(){ box.classList.remove('on'); orig(); setTimeout(function(){ var i=document.getElementById('pinInput'); if(i){ i.value='2468'; i.focus(); } }, 80); };
+  box.addEventListener('click', function(e){ if (e.target === box) box.classList.remove('on'); });
+  document.addEventListener('keydown', function(e){ if (e.key === 'Escape') box.classList.remove('on'); });
+})();
 </script>
 </body>
 </html>

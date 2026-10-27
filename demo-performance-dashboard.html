@@ -57,7 +57,7 @@ function getDashboardData() {
       var caseNumber = row[4] ? row[4].toString().trim() : '';
       var agentName = row[5] ? row[5].toString().trim() : '';
       var lob = row[6] ? row[6].toString().trim() : 'General';
-      // Blank score (AHT, ADR, Need Info Abandoned, SLA audits) -> null, excluded from averages
+      // Blank score (AHT, Resolution Delay, Info Request Abandoned, SLA audits) -> null, excluded from averages
       var totalScore = (row[7] === '' || row[7] === null) ? null : parseNumeric(row[7]);
       var rawStart = row[8] ? row[8].toString().trim() : '';
       var rawEnd = row[9] ? row[9].toString().trim() : '';

@@ -7,16 +7,16 @@
   D.LEADS = [{ name: 'QA Lead One', email: 'lead.one@demo-qa.com' }, { name: 'QA Lead Two', email: 'lead.two@demo-qa.com' }];
   // QAs: name, LOB, shift (IST) and week-offs
   D.QAS = [
-    ['Aarav Mehta', 'SSO MPCX', '09:00 - 18:00', ['Saturday', 'Sunday']],
-    ['Priya Nair', 'SSO MPCX', '19:00 - 04:00', ['Sunday', 'Monday']],
-    ['Rohit Verma', 'SSO Disputes (SFF)', '09:00 - 18:00', ['Saturday', 'Sunday']],
-    ['Sneha Kapoor', 'SSO Disputes (SFF)', '19:00 - 04:00', ['Saturday', 'Sunday']],
-    ['Vikram Rao', 'SSO Cust Returns (WFS)', '09:00 - 18:00', ['Sunday', 'Monday']],
-    ['Neha Joshi', 'SSO Cust Returns (WFS)', '19:00 - 04:00', ['Saturday', 'Sunday']],
-    ['Karan Malhotra', 'SSO Inventory MGMT', '09:00 - 18:00', ['Saturday', 'Sunday']],
-    ['Ananya Iyer', 'SSO Core', '19:00 - 04:00', ['Sunday', 'Monday']],
-    ['Arjun Singh', 'SSO Disputes (WFS)', '09:00 - 18:00', ['Saturday', 'Sunday']],
-    ['Pooja Sharma', 'SSO Disputes (WFS)', '19:00 - 04:00', ['Saturday', 'Sunday']]
+    ['Aarav Mehta', 'Product Listings', '09:00 - 18:00', ['Saturday', 'Sunday']],
+    ['Priya Nair', 'Product Listings', '19:00 - 04:00', ['Sunday', 'Monday']],
+    ['Rohit Verma', 'Billing Disputes', '09:00 - 18:00', ['Saturday', 'Sunday']],
+    ['Sneha Kapoor', 'Billing Disputes', '19:00 - 04:00', ['Saturday', 'Sunday']],
+    ['Vikram Rao', 'Returns & Refunds', '09:00 - 18:00', ['Sunday', 'Monday']],
+    ['Neha Joshi', 'Returns & Refunds', '19:00 - 04:00', ['Saturday', 'Sunday']],
+    ['Karan Malhotra', 'Inventory Support', '09:00 - 18:00', ['Saturday', 'Sunday']],
+    ['Ananya Iyer', 'General Support', '19:00 - 04:00', ['Sunday', 'Monday']],
+    ['Arjun Singh', 'Order Disputes', '09:00 - 18:00', ['Saturday', 'Sunday']],
+    ['Pooja Sharma', 'Order Disputes', '19:00 - 04:00', ['Saturday', 'Sunday']]
   ].map(function (q) { return { name: q[0], lob: q[1], shift: q[2], wo: q[3], email: q[0].toLowerCase().replace(/\s+/g, '.') + '@demo-qa.com', sf: q[0] }; });
   // per-QA personality: quality (0..1 chance a parameter is No), speed factor
   var PERS = [0.04, 0.06, 0.09, 0.05, 0.12, 0.05, 0.07, 0.10, 0.06, 0.08], SPEED = [1.08, 1.0, 0.86, 1.03, 0.78, 0.97, 1.0, 0.9, 1.05, 0.95];
@@ -25,10 +25,10 @@
   var LAST = ['Sen', 'Malhotra', 'Bose', 'Qureshi', 'Mirza', 'Kapoor', 'Gill', 'Shetty', 'Menon', 'Desai', 'Khan', 'Reddy', 'Chopra', 'Das', 'Pandey', 'Bhat'];
   D.agents = function (n, seed) { var R = D.rng(seed || 11), out = {}, list = []; while (list.length < n) { var x = FIRST[Math.floor(R() * FIRST.length)] + ' ' + LAST[Math.floor(R() * LAST.length)]; if (!out[x]) { out[x] = 1; list.push(x); } } return list; };
   D.AGENTS = D.agents(60, 5);
-  D.LOB_TARGET = { 'SSO Disputes (SFF)': 40, 'SSO Cust Returns (WFS)': 32, 'SSO MPCX': 27, 'SSO Inventory MGMT': 25, 'SSO Core': 24, 'SSO Disputes (WFS)': 22 };
+  D.LOB_TARGET = { 'Billing Disputes': 40, 'Returns & Refunds': 32, 'Product Listings': 27, 'Inventory Support': 25, 'General Support': 24, 'Order Disputes': 22 };
   D.DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
-  // Walmart fiscal week number (Saturday-Friday), same formula as the portal
+  // fiscal week number (Saturday-Friday), same formula as the portal
   D.walmartWeekOf = function (dateUtc) {
     var DAY = 86400000, satOffset = (dateUtc.getUTCDay() + 1) % 7;
     var x = new Date(dateUtc.getTime() - (satOffset + 28) * DAY);
@@ -41,8 +41,8 @@
   D.isoIst = function (date) { var x = new Date(date.getTime() + 330 * 60000); return x.toISOString().slice(0, 19) + '+05:30'; };
   D.todayIst = function () { var x = new Date(Date.now() + 330 * 60000); return new Date(Date.UTC(x.getUTCFullYear(), x.getUTCMonth(), x.getUTCDate())); };
 
-  D.SUB = { 'SLA_First_Response': 5, 'Need Info Abandoned': 5, 'SLA_First_Resolve': 8, 'SLA_Final_Resolve': 8, 'ADR': 10, 'AHT': 10 };
-  /* Generates audits for the last `weeks` full Walmart weeks plus the current week up to yesterday.
+  D.SUB = { 'SLA_First_Response': 5, 'Info Request Abandoned': 5, 'SLA_First_Resolve': 8, 'SLA_Final_Resolve': 8, 'Resolution Delay': 10, 'AHT': 10 };
+  /* Generates audits for the last `weeks` full Fiscal weeks plus the current week up to yesterday.
      Returns rows: {qa, date(UTC midnight shift date), start, end, dur, source, caseNo, agent, lob, score|null, dispute} */
   D.audits = function (opts) {
     opts = opts || {}; var R = D.rng(opts.seed || 42), weeks = opts.weeks || 4;
@@ -63,7 +63,7 @@
         while (budget > 4) {
           var sub = R() < 0.18, src, mins;
           if (sub) { var keys = Object.keys(D.SUB); src = keys[Math.floor(R() * keys.length)]; mins = D.SUB[src] * (0.7 + R() * 0.5); }
-          else { var r = R(); src = r < 0.42 ? 'FCR' : r < 0.78 ? 'Reopen' : r < 0.9 ? 'CSAT' : r < 0.96 ? 'General Audit' : 'BPO Coaching'; mins = perCase * (0.75 + R() * 0.45) / q.speed; }
+          else { var r = R(); src = r < 0.42 ? 'FCR' : r < 0.78 ? 'Reopen' : r < 0.9 ? 'CSAT' : r < 0.96 ? 'General Audit' : 'Escalation Review'; mins = perCase * (0.75 + R() * 0.45) / q.speed; }
           var score = null;
           if (!sub) {
             if (R() < q.noRate * 0.45) score = 0;

@@ -8,15 +8,15 @@
 <script>
 (function(){
 var D=DEMODATA, R=D.rng(9);
-var lobs=['WFS Disputes','WFS Disputes','Core Chat','SFF Disputes','SIM Chat','MPCX Content','Inventory Management','WFS Customer','Strikethrough'];
+var lobs=['Order Disputes','Order Disputes','General Support','Billing Disputes','Onboarding Chat','Listing Content','Inventory Support','Returns & Refunds','Pricing Support'];
 var names=D.agents(44,77);
 var rows=[['ACT ID','Name','Salesforce Name','Designation','Email','LOB','Manager','Work Location','Level','Shift (IST)','Status','Office Location']];
 names.forEach(function(n,i){var night=i%5>=3; rows.push(['ACT'+(2000+i),n,n,'QA',n.toLowerCase().replace(/\s+/g,'.')+'@demo-qa.com',lobs[Math.floor(R()*lobs.length)],'QA Lead','Gurugram','L1',night?'19:00 - 04:00':(R()<.5?'09:00 - 18:00':'10:00 - 19:00'),'Active','Gurugram - 8th Floor']);});
 // two remote QAs (filtered out by the planner: not in the Gurugram office)
-rows.push(['ACT2990','Tara Kulkarni','Tara Kulkarni','QA','','WFS Disputes','QA Lead','Bhopal','L1','09:00 - 18:00','Active','Bhopal']);
+rows.push(['ACT2990','Tara Kulkarni','Tara Kulkarni','QA','','Order Disputes','QA Lead','Bhopal','L1','09:00 - 18:00','Active','Bhopal']);
 DEMO.seatNames={dayFixed:{'E2-02':names[0],'E1-01':names[1],'E1-02':names[2]},nightFixed:{'E2-02':names[3],'E2-03':names[4],'E2-04':names[8]}};
 // make fixed day QAs day shift and fixed night QAs night shift
-[[0,'Core Chat'],[1,'SIM Chat'],[2,'MPCX Content']].forEach(function(x){rows[x[0]+1][9]='09:00 - 18:00';rows[x[0]+1][5]=x[1];});[[3,'Strikethrough'],[4,'SFF Disputes'],[8,'Core Chat']].forEach(function(x){rows[x[0]+1][9]='19:00 - 04:00';rows[x[0]+1][5]=x[1];});
+[[0,'General Support'],[1,'Onboarding Chat'],[2,'Listing Content']].forEach(function(x){rows[x[0]+1][9]='09:00 - 18:00';rows[x[0]+1][5]=x[1];});[[3,'Pricing Support'],[4,'Billing Disputes'],[8,'General Support']].forEach(function(x){rows[x[0]+1][9]='19:00 - 04:00';rows[x[0]+1][5]=x[1];});
 DEMO.book('ACTIVE',{Roster:rows});
 })();
 
@@ -125,7 +125,7 @@ function normalizeLob(str) {
 
 function isWfsLob(lob) {
   const l = normalizeLob(lob);
-  return l.includes('wfsdispute');
+  return l.includes('orderdispute');
 }
 
 function isValidQAName(name) {
@@ -558,14 +558,14 @@ if(DEMO.init) DEMO.init();
     .dropdown-row label { font-size: 10px; font-weight: 700; color: #64748b; width: 28px; }
     .desk-select { flex: 1; padding: 4px 6px; font-size: 11px; border-radius: 4px; border: 1px solid #cbd5e1; background: #ffffff; }
     .lob-pill { font-size: 9px; font-weight: 800; padding: 2px 6px; border-radius: 4px; text-transform: uppercase; display: inline-block; white-space: nowrap; }
-    .lob-wfsdisputes { background-color: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; }
-    .lob-corechat { background-color: #fef3c7; color: #b45309; border: 1px solid #fde68a; }
-    .lob-sffdisputes { background-color: #fce7f3; color: #be185d; border: 1px solid #fbcfe8; }
-    .lob-simchat { background-color: #ede9fe; color: #6d28d9; border: 1px solid #ddd6fe; }
-    .lob-mpcxcontent { background-color: #ffedd5; color: #c2410c; border: 1px solid #fed7aa; }
-    .lob-inventorymanag { background-color: #dcfce7; color: #15803d; border: 1px solid #bbf7d0; }
-    .lob-wfscustomer { background-color: #ccfbf1; color: #0f766e; border: 1px solid #99f6e4; }
-    .lob-strikethrough { background-color: #e0e7ff; color: #4338ca; border: 1px solid #c7d2fe; }
+    .lob-orderdisputes { background-color: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; }
+    .lob-generalsupport { background-color: #fef3c7; color: #b45309; border: 1px solid #fde68a; }
+    .lob-billingdisputes { background-color: #fce7f3; color: #be185d; border: 1px solid #fbcfe8; }
+    .lob-onboardingchat { background-color: #ede9fe; color: #6d28d9; border: 1px solid #ddd6fe; }
+    .lob-listingcontent { background-color: #ffedd5; color: #c2410c; border: 1px solid #fed7aa; }
+    .lob-inventorysupport { background-color: #dcfce7; color: #15803d; border: 1px solid #bbf7d0; }
+    .lob-returnsrefunds { background-color: #ccfbf1; color: #0f766e; border: 1px solid #99f6e4; }
+    .lob-pricingsupport { background-color: #e0e7ff; color: #4338ca; border: 1px solid #c7d2fe; }
     .lob-qaleadership { background-color: #fef08a; color: #854d0e; border: 1px solid #fde047; }
     .lob-otrow { background-color: #f3e8ff; color: #7e22ce; border: 1px solid #d8b4fe; }
     .lob-default { background-color: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; }
@@ -678,14 +678,14 @@ if(DEMO.init) DEMO.init();
       const clean = lob.toLowerCase().replace(/[^a-z]/g, '');
       if (clean.includes('otrow') || clean.includes('overtime')) return 'lob-otrow';
       if (clean.includes('leadership') || clean.includes('lead')) return 'lob-qaleadership';
-      if (clean.includes('wfsdisputes')) return 'lob-wfsdisputes';
-      if (clean.includes('corechat')) return 'lob-corechat';
-      if (clean.includes('sffdisputes')) return 'lob-sffdisputes';
-      if (clean.includes('simchat')) return 'lob-simchat';
-      if (clean.includes('mpcx')) return 'lob-mpcxcontent';
-      if (clean.includes('inventory')) return 'lob-inventorymanag';
-      if (clean.includes('wfscustomer')) return 'lob-wfscustomer';
-      if (clean.includes('strikethrough')) return 'lob-strikethrough';
+      if (clean.includes('orderdisputes')) return 'lob-orderdisputes';
+      if (clean.includes('generalsupport')) return 'lob-generalsupport';
+      if (clean.includes('billingdisputes')) return 'lob-billingdisputes';
+      if (clean.includes('onboardingchat')) return 'lob-onboardingchat';
+      if (clean.includes('listingcontent')) return 'lob-listingcontent';
+      if (clean.includes('inventory')) return 'lob-inventorysupport';
+      if (clean.includes('returnsrefunds')) return 'lob-returnsrefunds';
+      if (clean.includes('pricingsupport')) return 'lob-pricingsupport';
       return 'lob-default';
     }
 
